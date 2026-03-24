@@ -1,0 +1,15 @@
+# Roblox
+*.rbxlx.lock
+*.rbxl.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+*.swp
+*.swo
+
+# Rojo
+sourcemap.json

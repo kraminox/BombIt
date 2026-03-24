@@ -1,0 +1,63 @@
+{
+  "name": "BombThem",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Shared": {
+        "$path": "src/shared"
+      },
+      "Remotes": {
+        "$className": "Folder"
+      },
+      "Characters": {
+        "$className": "Folder"
+      }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    },
+    "Workspace": {
+      "$className": "Workspace",
+      "$properties": {
+        "Gravity": 196.2
+      },
+      "Arena": {
+        "$className": "Folder"
+      },
+      "Lobby": {
+        "$className": "Folder"
+      }
+    },
+    "Lighting": {
+      "$className": "Lighting",
+      "$properties": {
+        "Ambient": [0.4, 0.4, 0.4],
+        "Brightness": 2,
+        "OutdoorAmbient": [0.5, 0.5, 0.5],
+        "ClockTime": 14
+      }
+    },
+    "StarterGui": {
+      "$className": "StarterGui",
+      "$properties": {
+        "ResetPlayerGuiOnSpawn": false
+      }
+    },
+    "SoundService": {
+      "$className": "SoundService"
+    }
+  }
+}
