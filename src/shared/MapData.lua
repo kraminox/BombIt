@@ -13,11 +13,20 @@ local MapData = {}
 MapData.walkabilityGrid = {} :: {{boolean}}
 MapData.bombGrid = {} :: {{boolean}} -- true = bomb present
 
--- Dynamic grid origin (set by MapGenerator based on Canvas position)
+-- Dynamic grid origin and rotation (set by MapGenerator based on Canvas CFrame)
 MapData.gridOrigin = Vector3.new(-50, 1, -50)
+MapData.gridCFrame = CFrame.new(-50, 1, -50) -- Full CFrame with rotation
+MapData.gridRotation = CFrame.new() -- Just the rotation component
 
 function MapData.SetGridOrigin(origin: Vector3)
 	MapData.gridOrigin = origin
+end
+
+function MapData.SetGridCFrame(cframe: CFrame)
+	MapData.gridCFrame = cframe
+	MapData.gridOrigin = cframe.Position
+	-- Extract just the rotation component (no position)
+	MapData.gridRotation = cframe - cframe.Position
 end
 
 -- Initialize empty grids
@@ -39,9 +48,14 @@ function MapData.InitializeGrids()
 end
 
 -- Convert world position to grid coordinates (1-indexed)
+-- Handles rotated canvas by transforming to local space first
 function MapData.WorldToGrid(worldPos: Vector3): (number, number)
-	local relativeX = worldPos.X - MapData.gridOrigin.X
-	local relativeZ = worldPos.Z - MapData.gridOrigin.Z
+	-- Transform world position to local grid space (inverse of grid CFrame)
+	local localPos = MapData.gridCFrame:PointToObjectSpace(worldPos)
+
+	-- In local space, X is grid X direction, Z is grid Y direction
+	local relativeX = localPos.X
+	local relativeZ = localPos.Z
 
 	local gridX = math.floor(relativeX / Constants.TILE_SIZE) + 1
 	local gridY = math.floor(relativeZ / Constants.TILE_SIZE) + 1
@@ -54,12 +68,34 @@ function MapData.WorldToGrid(worldPos: Vector3): (number, number)
 end
 
 -- Convert grid coordinates to world position (center of tile)
+-- Applies canvas rotation to position tiles correctly
 function MapData.GridToWorld(gridX: number, gridY: number): Vector3
-	local worldX = MapData.gridOrigin.X + (gridX - 0.5) * Constants.TILE_SIZE
-	local worldY = MapData.gridOrigin.Y
-	local worldZ = MapData.gridOrigin.Z + (gridY - 0.5) * Constants.TILE_SIZE
+	-- Calculate local position (relative to grid origin, before rotation)
+	local localX = (gridX - 0.5) * Constants.TILE_SIZE
+	local localY = 0
+	local localZ = (gridY - 0.5) * Constants.TILE_SIZE
+	local localPos = Vector3.new(localX, localY, localZ)
 
-	return Vector3.new(worldX, worldY, worldZ)
+	-- Transform to world space using grid CFrame (applies rotation)
+	local worldPos = MapData.gridCFrame:PointToWorldSpace(localPos)
+
+	return worldPos
+end
+
+-- Get the rotation CFrame to apply to placed objects
+function MapData.GetGridRotation(): CFrame
+	return MapData.gridRotation
+end
+
+-- Get full CFrame for a grid position (position + rotation)
+function MapData.GridToCFrame(gridX: number, gridY: number): CFrame
+	local localX = (gridX - 0.5) * Constants.TILE_SIZE
+	local localY = 0
+	local localZ = (gridY - 0.5) * Constants.TILE_SIZE
+
+	-- Create local CFrame and transform to world space
+	local localCFrame = CFrame.new(localX, localY, localZ)
+	return MapData.gridCFrame * localCFrame
 end
 
 -- Check if a grid position is walkable (no walls)
@@ -208,12 +244,10 @@ function MapData.GetExplosionTiles(gridX: number, gridY: number, range: number):
 				break
 			end
 
+			-- Add tile to explosion (including soft walls - they all get destroyed)
 			table.insert(tiles, {x = tx, y = ty})
 
-			-- If this is a soft wall (not walkable but not hard), explosion stops after destroying it
-			if not MapData.IsWalkable(tx, ty) then
-				break
-			end
+			-- Soft walls don't stop the explosion anymore - continue through them
 		end
 	end
 

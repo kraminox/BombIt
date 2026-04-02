@@ -20,6 +20,35 @@ local PlaceBomb = Remotes:WaitForChild("PlaceBomb")
 local SyncPlayerData = Remotes:WaitForChild("SyncPlayerData")
 local RoundStateChanged = Remotes:WaitForChild("RoundStateChanged")
 
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+-- Shared modules
+local MapData = require(Shared:WaitForChild("MapData"))
+
+-- Initialize grid CFrame from Canvas (client-side)
+local function InitializeGridFromCanvas()
+	local canvasPart = Workspace:FindFirstChild("Canvas") :: BasePart?
+	if canvasPart then
+		local canvasCFrame = canvasPart.CFrame
+		local canvasSize = canvasPart.Size
+
+		-- Grid origin is at corner of canvas in local space, then transformed to world space
+		local localCorner = Vector3.new(-canvasSize.X / 2, canvasSize.Y / 2, -canvasSize.Z / 2)
+		local worldCorner = canvasCFrame:PointToWorldSpace(localCorner)
+
+		-- Create the grid CFrame: position at corner, rotation from canvas
+		local gridCFrame = CFrame.new(worldCorner) * (canvasCFrame - canvasCFrame.Position)
+		MapData.SetGridCFrame(gridCFrame)
+		print("[LocalPlayer] Initialized grid CFrame from Canvas")
+	else
+		warn("[LocalPlayer] Canvas not found, grid rotation may be incorrect")
+	end
+end
+
+-- Initialize grid on load
+InitializeGridFromCanvas()
+
 -- Current game state
 local currentGameState = Constants.STATES.LOBBY
 
@@ -36,6 +65,68 @@ local localPlayerData = {
 
 -- Movement state
 local moveDirection = Vector3.zero
+
+-- Bomb placement indicator
+local placementIndicator: Part? = nil
+
+local function CreatePlacementIndicator(): Part
+	local indicator = Instance.new("Part")
+	indicator.Name = "BombPlacementIndicator"
+	indicator.Size = Vector3.new(Constants.TILE_SIZE - 0.2, 0.1, Constants.TILE_SIZE - 0.2)
+	indicator.Color = Color3.fromRGB(100, 200, 255) -- Light blue
+	indicator.Material = Enum.Material.Neon
+	indicator.Transparency = 0.5
+	indicator.Anchored = true
+	indicator.CanCollide = false
+	indicator.CastShadow = false
+	indicator.Parent = Workspace
+
+	-- Pulsing animation
+	task.spawn(function()
+		while indicator and indicator.Parent do
+			TweenService:Create(indicator, TweenInfo.new(0.4), {Transparency = 0.3}):Play()
+			task.wait(0.4)
+			if not indicator or not indicator.Parent then break end
+			TweenService:Create(indicator, TweenInfo.new(0.4), {Transparency = 0.7}):Play()
+			task.wait(0.4)
+		end
+	end)
+
+	return indicator
+end
+
+local function UpdatePlacementIndicator()
+	-- Only show during gameplay when player can place bombs
+	local shouldShow = (currentGameState == Constants.STATES.PLAYING)
+		and localPlayerData.isAlive
+		and (localPlayerData.activeBombs < localPlayerData.bombCount)
+
+	if not shouldShow then
+		if placementIndicator then
+			placementIndicator.Parent = nil
+		end
+		return
+	end
+
+	local character = player.Character
+	if not character then return end
+
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	-- Get grid position
+	local gridX, gridY = MapData.WorldToGrid(hrp.Position)
+	local tileCFrame = MapData.GridToCFrame(gridX, gridY)
+
+	-- Create indicator if needed
+	if not placementIndicator then
+		placementIndicator = CreatePlacementIndicator()
+	end
+
+	-- Update position with rotation to match grid
+	placementIndicator.CFrame = tileCFrame * CFrame.new(0, 0.15, 0)
+	placementIndicator.Parent = Workspace
+end
 
 -- Input handling
 local inputKeys = {
@@ -117,47 +208,27 @@ end
 local function CalculateMoveDirection(): Vector3
 	local dir = Vector3.zero
 
-	-- Check if we should use fixed grid movement (during gameplay with overhead camera)
-	local useFixedMovement = (currentGameState == Constants.STATES.PLAYING or currentGameState == Constants.STATES.COUNTDOWN)
+	-- Always use camera-relative movement so WASD matches what you see on screen
+	local camera = workspace.CurrentCamera
+	if camera then
+		local camCFrame = camera.CFrame
+		local forward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z)
+		local right = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z)
 
-	if useFixedMovement then
-		-- Fixed directions for overhead camera (camera looking from +Z toward -Z)
-		-- W = up on screen (-Z), S = down (+Z), A = left (-X), D = right (+X)
+		if forward.Magnitude > 0 then forward = forward.Unit end
+		if right.Magnitude > 0 then right = right.Unit end
+
 		if activeInputs.forward then
-			dir = dir + Vector3.new(0, 0, -1)
+			dir = dir + forward
 		end
 		if activeInputs.backward then
-			dir = dir + Vector3.new(0, 0, 1)
+			dir = dir - forward
 		end
 		if activeInputs.left then
-			dir = dir + Vector3.new(-1, 0, 0)
+			dir = dir - right
 		end
 		if activeInputs.right then
-			dir = dir + Vector3.new(1, 0, 0)
-		end
-	else
-		-- Camera-relative movement (free movement in lobby)
-		local camera = workspace.CurrentCamera
-		if camera then
-			local camCFrame = camera.CFrame
-			local forward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z)
-			local right = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z)
-
-			if forward.Magnitude > 0 then forward = forward.Unit end
-			if right.Magnitude > 0 then right = right.Unit end
-
-			if activeInputs.forward then
-				dir = dir + forward
-			end
-			if activeInputs.backward then
-				dir = dir - forward
-			end
-			if activeInputs.left then
-				dir = dir - right
-			end
-			if activeInputs.right then
-				dir = dir + right
-			end
+			dir = dir + right
 		end
 	end
 
@@ -214,22 +285,23 @@ local function OnUpdate(deltaTime: number)
 		humanoid.AutoRotate = true
 	end
 
-	-- Smooth velocity-based movement
+	-- Smooth velocity-based movement (only affects horizontal, preserves gravity)
 	local speed = localPlayerData.speed
 	local currentVel = hrp.AssemblyLinearVelocity
 	local currentHorizontal = Vector3.new(currentVel.X, 0, currentVel.Z)
 
 	if moveDirection.Magnitude > 0 then
 		local targetVelocity = moveDirection * speed
-
-		-- Smooth interpolation for fluid movement (0.25 = responsive but smooth)
-		local smoothedVelocity = currentHorizontal:Lerp(targetVelocity, 0.25)
-		hrp.AssemblyLinearVelocity = Vector3.new(smoothedVelocity.X, currentVel.Y, smoothedVelocity.Z)
+		-- Instant start, keep vertical velocity for gravity
+		hrp.AssemblyLinearVelocity = Vector3.new(targetVelocity.X, currentVel.Y, targetVelocity.Z)
 	else
-		-- Smooth deceleration when stopping (0.2 = quick but not instant)
-		local smoothedVelocity = currentHorizontal:Lerp(Vector3.zero, 0.2)
+		-- Smooth deceleration when stopping
+		local smoothedVelocity = currentHorizontal:Lerp(Vector3.zero, 0.15)
 		hrp.AssemblyLinearVelocity = Vector3.new(smoothedVelocity.X, currentVel.Y, smoothedVelocity.Z)
 	end
+
+	-- Update bomb placement indicator
+	UpdatePlacementIndicator()
 end
 
 -- Handle server data sync
@@ -324,6 +396,11 @@ RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
 	else
 		SetJumpEnabled(true)
 	end
+
+	-- Hide placement indicator when not playing
+	if currentGameState ~= Constants.STATES.PLAYING and placementIndicator then
+		placementIndicator.Parent = nil
+	end
 end)
 
 -- Also disable jump when character spawns during gameplay
@@ -338,6 +415,48 @@ end)
 UserInputService.InputBegan:Connect(OnInputBegan)
 UserInputService.InputEnded:Connect(OnInputEnded)
 RunService.Heartbeat:Connect(OnUpdate)
+
+-- Danger tiles visibility management
+-- Hide danger tiles for players not in the game (dead/spectating)
+local function UpdateDangerTilesVisibility()
+	local arena = Workspace:FindFirstChild("Arena")
+	if not arena then return end
+
+	local dangerFolder = arena:FindFirstChild("DangerTiles")
+	if not dangerFolder then return end
+
+	-- Show danger tiles only if player is alive and game is playing
+	local shouldShow = localPlayerData.isAlive and
+		(currentGameState == Constants.STATES.PLAYING or currentGameState == Constants.STATES.COUNTDOWN)
+
+	for _, tile in ipairs(dangerFolder:GetChildren()) do
+		if tile:IsA("BasePart") then
+			-- Use LocalTransparencyModifier to hide without affecting server state
+			tile.LocalTransparencyModifier = shouldShow and 0 or 1
+		end
+	end
+end
+
+-- Update danger tile visibility when player state changes
+SyncPlayerData.OnClientEvent:Connect(function(data)
+	if data then
+		-- Update visibility after isAlive status change
+		task.defer(UpdateDangerTilesVisibility)
+	end
+end)
+
+-- Update when game state changes
+RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
+	task.defer(UpdateDangerTilesVisibility)
+end)
+
+-- Continuously check for new danger tiles (they're created dynamically)
+task.spawn(function()
+	while true do
+		UpdateDangerTilesVisibility()
+		task.wait(0.2)
+	end
+end)
 
 -- Mobile controls will be handled by GameUI
 print("[LocalPlayer] Input handling initialized")

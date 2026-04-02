@@ -22,6 +22,7 @@ local lobbyFolder: Folder
 local charactersFolder: Folder
 local canvasPart: BasePart?
 local gridOrigin: Vector3 = Vector3.zero
+local gridCFrame: CFrame = CFrame.new() -- Full CFrame including rotation
 
 -- Model templates (crates, props, floor tiles)
 local modelTemplates = {
@@ -29,6 +30,12 @@ local modelTemplates = {
 	HardCrate = nil :: Model?,
 	LightShade = nil :: Instance?,
 	DarkShade = nil :: Instance?,
+}
+
+-- City assets (loaded from ReplicatedStorage/Assets/City)
+local cityAssets = {
+	soft = {} :: {Model},
+	hard = {} :: {Model},
 }
 
 -- Create a smooth low-poly part
@@ -53,32 +60,29 @@ local function CreatePart(size: Vector3, position: Vector3, color: Color3, name:
 	return part
 end
 
--- Create a crate model (soft or hard)
-local function CreateCrate(position: Vector3, name: string, crateType: string): Model?
+-- Create a crate model (soft or hard) with CFrame support for rotation
+local function CreateCrate(cframe: CFrame, name: string, crateType: string): Model?
 	local template = crateType == "soft" and modelTemplates.SoftCrate or modelTemplates.HardCrate
 	if not template then return nil end
 
 	local crate = template:Clone()
 	crate.Name = name
 
-	-- Position the crate
+	-- Position the crate with rotation
 	local primaryPart = crate.PrimaryPart or crate:FindFirstChildWhichIsA("BasePart")
 	if primaryPart then
-		crate:SetPrimaryPartCFrame(CFrame.new(position))
+		crate:SetPrimaryPartCFrame(cframe)
 	else
-		-- Move all parts manually
-		for _, part in ipairs(crate:GetDescendants()) do
-			if part:IsA("BasePart") then
-				part.Anchored = true
-			end
-		end
-		-- Set position of first part
+		-- Move all parts manually with rotation
 		local firstPart = crate:FindFirstChildWhichIsA("BasePart")
 		if firstPart then
-			local offset = firstPart.Position
+			local originalCFrame = firstPart.CFrame
 			for _, part in ipairs(crate:GetDescendants()) do
 				if part:IsA("BasePart") then
-					part.Position = position + (part.Position - offset)
+					-- Calculate relative CFrame and apply to new position
+					local relativeCFrame = originalCFrame:ToObjectSpace(part.CFrame)
+					part.CFrame = cframe * relativeCFrame
+					part.Anchored = true
 				end
 			end
 		end
@@ -133,20 +137,63 @@ function MapGenerator.Initialize()
 	if modelTemplates.LightShade then print("[MapGenerator] Found LightShade") end
 	if modelTemplates.DarkShade then print("[MapGenerator] Found DarkShade") end
 
-	-- Calculate grid origin from Canvas part
+	-- Load city assets from ReplicatedStorage/Assets/City
+	local AssetsFolder = ReplicatedStorage:FindFirstChild("Assets")
+	if AssetsFolder then
+		local CityFolder = AssetsFolder:FindFirstChild("City")
+		if CityFolder then
+			-- Clear previous city assets
+			cityAssets.soft = {}
+			cityAssets.hard = {}
+
+			for _, asset in ipairs(CityFolder:GetChildren()) do
+				if asset:IsA("Model") then
+					local assetType = asset:GetAttribute("Type")
+					if assetType == "Soft" then
+						table.insert(cityAssets.soft, asset)
+						print("[MapGenerator] Found city soft asset:", asset.Name)
+					elseif assetType == "Hard" then
+						table.insert(cityAssets.hard, asset)
+						print("[MapGenerator] Found city hard asset:", asset.Name)
+					else
+						warn("[MapGenerator] City asset missing Type attribute:", asset.Name)
+					end
+				end
+			end
+
+			print("[MapGenerator] Loaded", #cityAssets.soft, "soft and", #cityAssets.hard, "hard city assets")
+		else
+			print("[MapGenerator] No City folder found in Assets")
+		end
+	else
+		print("[MapGenerator] No Assets folder found in ReplicatedStorage")
+	end
+
+	-- Calculate grid origin and rotation from Canvas part
+	canvasPart = Workspace:FindFirstChild("Canvas") :: BasePart?
+
 	if canvasPart then
-		local canvasPos = canvasPart.Position
+		local canvasCFrame = canvasPart.CFrame
 		local canvasSize = canvasPart.Size
-		-- Grid origin is bottom-left corner of canvas (on top surface)
-		gridOrigin = Vector3.new(
-			canvasPos.X - canvasSize.X / 2,
-			canvasPos.Y + canvasSize.Y / 2,
-			canvasPos.Z - canvasSize.Z / 2
-		)
-		print("[MapGenerator] Found Canvas at", canvasPos, "Grid origin:", gridOrigin)
+		print("[MapGenerator] Found Canvas - CFrame:", canvasCFrame, "Size:", canvasSize)
+
+		-- Grid origin is at corner of canvas in local space, then transformed to world space
+		-- Local corner is at (-sizeX/2, +sizeY/2, -sizeZ/2) relative to canvas center
+		local localCorner = Vector3.new(-canvasSize.X / 2, canvasSize.Y / 2, -canvasSize.Z / 2)
+		local worldCorner = canvasCFrame:PointToWorldSpace(localCorner)
+
+		-- Create the grid CFrame: position at corner, rotation from canvas
+		gridCFrame = CFrame.new(worldCorner) * (canvasCFrame - canvasCFrame.Position)
+		gridOrigin = worldCorner
+
+		MapData.SetGridCFrame(gridCFrame)
+		print("[MapGenerator] Grid CFrame:", gridCFrame)
+		print("[MapGenerator] Grid origin:", gridOrigin)
 	else
 		warn("[MapGenerator] Canvas not found in Workspace, using default origin")
 		gridOrigin = Vector3.new(-50, 1, -50)
+		gridCFrame = CFrame.new(gridOrigin)
+		MapData.SetGridCFrame(gridCFrame)
 	end
 
 	print("[MapGenerator] Initialized")
@@ -477,16 +524,31 @@ function MapGenerator.GenerateMap()
 	-- Clear existing arena
 	arenaFolder:ClearAllChildren()
 
-	-- Set grid origin from Canvas
+	-- Find Canvas and set grid CFrame to align perfectly with it (including rotation)
+	canvasPart = Workspace:FindFirstChild("Canvas") :: BasePart?
+
 	if canvasPart then
-		local canvasPos = canvasPart.Position
+		local canvasCFrame = canvasPart.CFrame
 		local canvasSize = canvasPart.Size
-		gridOrigin = Vector3.new(
-			canvasPos.X - canvasSize.X / 2,
-			canvasPos.Y + canvasSize.Y / 2,
-			canvasPos.Z - canvasSize.Z / 2
-		)
-		MapData.SetGridOrigin(gridOrigin)
+
+		-- Grid origin is at corner of canvas in local space, then transformed to world space
+		local localCorner = Vector3.new(-canvasSize.X / 2, canvasSize.Y / 2, -canvasSize.Z / 2)
+		local worldCorner = canvasCFrame:PointToWorldSpace(localCorner)
+
+		-- Create the grid CFrame: position at corner, rotation from canvas
+		gridCFrame = CFrame.new(worldCorner) * (canvasCFrame - canvasCFrame.Position)
+		gridOrigin = worldCorner
+
+		MapData.SetGridCFrame(gridCFrame)
+
+		print("[MapGenerator] Canvas CFrame:", canvasCFrame)
+		print("[MapGenerator] Canvas size:", canvasSize)
+		print("[MapGenerator] Grid CFrame:", gridCFrame)
+	else
+		warn("[MapGenerator] No Canvas found in Workspace! Map will be misaligned.")
+		gridOrigin = Vector3.new(0, 1, 0)
+		gridCFrame = CFrame.new(gridOrigin)
+		MapData.SetGridCFrame(gridCFrame)
 	end
 
 	-- Reset grid data
@@ -507,64 +569,64 @@ function MapGenerator.GenerateMap()
 	local patternFunc = MAP_PATTERNS[math.random(1, #MAP_PATTERNS)]
 	patternFunc(layoutGrid, w, h)
 
-	-- Create floor tiles (checkerboard using LightShade mesh with color tinting)
-	local TILE_GAP = 0.15 -- Small gap between tiles
-	local TILE_SCALE = 1 - (TILE_GAP / Constants.TILE_SIZE) -- Scale down to create gap
+	-- Create floor tiles (checkerboard using LightShade and DarkShade meshes)
+	-- Green colors with subtle contrast
+	local LIGHT_COLOR = Color3.fromRGB(95, 180, 95)  -- Light green
+	local DARK_COLOR = Color3.fromRGB(80, 160, 80)   -- Slightly darker green (subtle difference)
 
-	-- Colors for checkerboard
-	local LIGHT_COLOR = Color3.fromRGB(255, 245, 230) -- Warm cream white
-	local DARK_COLOR = Color3.fromRGB(180, 160, 140)  -- Tan/brown for contrast
-
-	-- Use LightShade as the base template for all tiles
-	local tileTemplate = modelTemplates.LightShade
+	-- Get rotation for placing objects
+	local gridRotation = MapData.GetGridRotation()
 
 	for x = 1, w do
 		for y = 1, h do
-			local worldPos = MapData.GridToWorld(x, y)
+			local tileCFrame = MapData.GridToCFrame(x, y)
 			local isLightTile = (x + y) % 2 == 0
+
+			-- Use appropriate mesh template based on checkerboard pattern
+			local tileTemplate = isLightTile and modelTemplates.LightShade or modelTemplates.DarkShade
 			local tileColor = isLightTile and LIGHT_COLOR or DARK_COLOR
 
 			if tileTemplate then
 				local tile = tileTemplate:Clone()
 				tile.Name = "FloorTile_" .. x .. "_" .. y
 
-				-- Position tile (size is 4, 2.2, 4 so offset Y by half height)
-				local tilePos = worldPos - Vector3.new(0, 1.1, 0)
+				-- Position tile with rotation (size is 4, 2.2, 4 so offset Y by half height)
+				local tilePlacementCFrame = tileCFrame * CFrame.new(0, -1.1, 0)
 
 				if tile:IsA("BasePart") then
 					-- It's a MeshPart directly
-					tile.Position = tilePos
+					tile.CFrame = tilePlacementCFrame
 					tile.Anchored = true
 					tile.CanCollide = true
-					tile.Size = tile.Size * Vector3.new(TILE_SCALE, 1, TILE_SCALE)
 					tile.Color = tileColor
 					tile.Parent = arenaFolder
 				elseif tile:IsA("Model") then
 					local primary = tile.PrimaryPart or tile:FindFirstChildWhichIsA("BasePart")
 					if primary then
-						tile:SetPrimaryPartCFrame(CFrame.new(tilePos))
+						tile:SetPrimaryPartCFrame(tilePlacementCFrame)
 					end
-					-- Apply color and scale to all parts
+					-- Ensure all parts are anchored and apply color
 					for _, part in ipairs(tile:GetDescendants()) do
 						if part:IsA("BasePart") then
-							part.Size = part.Size * Vector3.new(TILE_SCALE, 1, TILE_SCALE)
-							part.Color = tileColor
 							part.Anchored = true
+							part.Color = tileColor
 						end
 					end
 					tile.Parent = arenaFolder
 				end
 			else
-				-- Fallback to basic part (with gap)
-				local gapSize = Constants.TILE_SIZE - TILE_GAP
-				local tile = CreatePart(
-					Vector3.new(gapSize, 1, gapSize),
-					worldPos - Vector3.new(0, 0.5, 0),
-					tileColor,
-					"FloorTile_" .. x .. "_" .. y,
-					true,
-					"FloorTile"
-				)
+				-- Fallback to basic part with rotation
+				local tile = Instance.new("Part")
+				tile.Size = Vector3.new(Constants.TILE_SIZE, 1, Constants.TILE_SIZE)
+				tile.CFrame = tileCFrame * CFrame.new(0, -0.5, 0)
+				tile.Color = tileColor
+				tile.Name = "FloorTile_" .. x .. "_" .. y
+				tile.Material = Enum.Material.SmoothPlastic
+				tile.Anchored = true
+				tile.CanCollide = true
+				tile.CastShadow = true
+				tile.TopSurface = Enum.SurfaceType.Smooth
+				tile.BottomSurface = Enum.SurfaceType.Smooth
 				tile.Parent = arenaFolder
 			end
 		end
@@ -579,24 +641,27 @@ function MapGenerator.GenerateMap()
 			if not MapData.IsInPlayableArea(x, y) then continue end
 
 			if layoutGrid[x][y] == "hard" then
-				local worldPos = MapData.GridToWorld(x, y)
-				local wallPos = worldPos + Vector3.new(0, Constants.TILE_SIZE / 2, 0)
+				local tileCFrame = MapData.GridToCFrame(x, y)
+				local wallCFrame = tileCFrame * CFrame.new(0, Constants.TILE_SIZE / 2, 0)
 
 				-- Try to use HardCrate model
-				local crate = CreateCrate(wallPos, "HardWall_" .. x .. "_" .. y, "hard")
+				local crate = CreateCrate(wallCFrame, "HardWall_" .. x .. "_" .. y, "hard")
 				if crate then
 					crate.Parent = arenaFolder
 					CollectionService:AddTag(crate, "HardWall")
 				else
-					-- Fallback to basic part
-					local wall = CreatePart(
-						Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE),
-						wallPos,
-						Constants.COLORS.HARD_WALL,
-						"HardWall_" .. x .. "_" .. y,
-						true,
-						"HardWall"
-					)
+					-- Fallback to basic part with rotation
+					local wall = Instance.new("Part")
+					wall.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
+					wall.CFrame = wallCFrame
+					wall.Color = Constants.COLORS.HARD_WALL
+					wall.Name = "HardWall_" .. x .. "_" .. y
+					wall.Material = Enum.Material.SmoothPlastic
+					wall.Anchored = true
+					wall.CanCollide = true
+					wall.CastShadow = true
+					wall.TopSurface = Enum.SurfaceType.Smooth
+					wall.BottomSurface = Enum.SurfaceType.Smooth
 					wall.Parent = arenaFolder
 					CollectionService:AddTag(wall, "HardWall")
 				end
@@ -634,30 +699,33 @@ function MapGenerator.GenerateMap()
 			local chance = math.min(softWallChance + neighborBonus, 0.75)
 
 			if math.random() < chance then
-				local worldPos = MapData.GridToWorld(x, y)
-				local wallPos = worldPos + Vector3.new(0, Constants.TILE_SIZE / 2, 0)
+				local tileCFrame = MapData.GridToCFrame(x, y)
+				local wallCFrame = tileCFrame * CFrame.new(0, Constants.TILE_SIZE / 2, 0)
 
 				-- Try to use SoftCrate model
-				local crate = CreateCrate(wallPos, "SoftWall_" .. x .. "_" .. y, "soft")
+				local crate = CreateCrate(wallCFrame, "SoftWall_" .. x .. "_" .. y, "soft")
 				if crate then
 					crate.Parent = arenaFolder
 					CollectionService:AddTag(crate, "SoftWall")
 				else
-					-- Fallback to basic part
+					-- Fallback to basic part with rotation
 					local colorVariation = math.random(-20, 20)
 					local r = math.clamp(Constants.COLORS.SOFT_WALL.R * 255 + colorVariation, 180, 255)
 					local g = math.clamp(Constants.COLORS.SOFT_WALL.G * 255 + colorVariation/2, 140, 200)
 					local b = math.clamp(Constants.COLORS.SOFT_WALL.B * 255 + colorVariation, 180, 255)
 					local softColor = Color3.fromRGB(r, g, b)
 
-					local wall = CreatePart(
-						Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE),
-						wallPos,
-						softColor,
-						"SoftWall_" .. x .. "_" .. y,
-						true,
-						"SoftWall"
-					)
+					local wall = Instance.new("Part")
+					wall.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
+					wall.CFrame = wallCFrame
+					wall.Color = softColor
+					wall.Name = "SoftWall_" .. x .. "_" .. y
+					wall.Material = Enum.Material.SmoothPlastic
+					wall.Anchored = true
+					wall.CanCollide = true
+					wall.CastShadow = true
+					wall.TopSurface = Enum.SurfaceType.Smooth
+					wall.BottomSurface = Enum.SurfaceType.Smooth
 					wall.Parent = arenaFolder
 					CollectionService:AddTag(wall, "SoftWall")
 				end
@@ -673,34 +741,126 @@ function MapGenerator.GenerateMap()
 
 	-- Border removed - arena is open
 
-	-- Spawn a few test coins on the map
+	-- Spawn coins on the map
 	task.defer(function()
-		print("[MapGenerator] Attempting to spawn test coins, PowerUpService:", PowerUpService)
 		local spawned = 0
-		for i = 1, 5 do
+		local targetCoins = 15
+		local attempts = 0
+		local maxAttempts = 50
+
+		while spawned < targetCoins and attempts < maxAttempts do
+			attempts = attempts + 1
 			local x = math.random(3, w - 2)
 			local y = math.random(3, h - 2)
-			if MapData.IsWalkable(x, y) then
-				print("[MapGenerator] Spawning coin at", x, y)
+			if MapData.IsWalkable(x, y) and not MapData.IsSpawnCorner(x, y) then
 				PowerUpService.SpawnCoin(x, y)
 				spawned = spawned + 1
 			end
 		end
-		print("[MapGenerator] Spawned", spawned, "test coins")
+		print("[MapGenerator] Spawned", spawned, "coins")
 	end)
+
+	-- Create invisible walls around the grid
+	MapGenerator.CreateInvisibleWalls()
 
 	print("[MapGenerator] Rectangle map generated on Canvas")
 end
 
--- Create 6 MapSpawn parts at spawn positions
-function MapGenerator.CreateMapSpawns()
-	local spawns = MapData.GetSpawnPositions()
+-- Create invisible walls around the grid perimeter (respects rotation)
+function MapGenerator.CreateInvisibleWalls()
+	local w = Constants.GRID_WIDTH
+	local h = Constants.GRID_HEIGHT
+	local tileSize = Constants.TILE_SIZE
+	local wallHeight = 10
+	local wallThickness = 2
 
-	for i, pos in ipairs(spawns) do
+	-- Grid dimensions in local space
+	local gridWidth = w * tileSize
+	local gridHeight = h * tileSize
+
+	-- Create walls folder
+	local wallsFolder = arenaFolder:FindFirstChild("InvisibleWalls")
+	if not wallsFolder then
+		wallsFolder = Instance.new("Folder")
+		wallsFolder.Name = "InvisibleWalls"
+		wallsFolder.Parent = arenaFolder
+	else
+		wallsFolder:ClearAllChildren()
+	end
+
+	-- Helper to create an invisible wall with CFrame
+	local function CreateWall(size: Vector3, cframe: CFrame, name: string)
+		local wall = Instance.new("Part")
+		wall.Name = name
+		wall.Size = size
+		wall.CFrame = cframe
+		wall.Anchored = true
+		wall.CanCollide = true
+		wall.Transparency = 1
+		wall.Parent = wallsFolder
+	end
+
+	-- Calculate wall positions in local grid space, then transform to world space
+	-- Walls are positioned at the edges of the grid
+
+	-- North wall (local negative Z edge, at Z = 0)
+	local northLocalCFrame = CFrame.new(gridWidth / 2, wallHeight / 2, -wallThickness / 2)
+	CreateWall(
+		Vector3.new(gridWidth + wallThickness * 2, wallHeight, wallThickness),
+		gridCFrame * northLocalCFrame,
+		"NorthWall"
+	)
+
+	-- South wall (local positive Z edge, at Z = gridHeight)
+	local southLocalCFrame = CFrame.new(gridWidth / 2, wallHeight / 2, gridHeight + wallThickness / 2)
+	CreateWall(
+		Vector3.new(gridWidth + wallThickness * 2, wallHeight, wallThickness),
+		gridCFrame * southLocalCFrame,
+		"SouthWall"
+	)
+
+	-- West wall (local negative X edge, at X = 0)
+	local westLocalCFrame = CFrame.new(-wallThickness / 2, wallHeight / 2, gridHeight / 2)
+	CreateWall(
+		Vector3.new(wallThickness, wallHeight, gridHeight),
+		gridCFrame * westLocalCFrame,
+		"WestWall"
+	)
+
+	-- East wall (local positive X edge, at X = gridWidth)
+	local eastLocalCFrame = CFrame.new(gridWidth + wallThickness / 2, wallHeight / 2, gridHeight / 2)
+	CreateWall(
+		Vector3.new(wallThickness, wallHeight, gridHeight),
+		gridCFrame * eastLocalCFrame,
+		"EastWall"
+	)
+
+	print("[MapGenerator] Created invisible walls around grid")
+end
+
+-- Create 6 MapSpawn parts at spawn positions (with rotation)
+function MapGenerator.CreateMapSpawns()
+	local w, h = Constants.GRID_WIDTH, Constants.GRID_HEIGHT
+	local midY = math.ceil(h / 2)
+
+	-- Spawn grid coordinates
+	local spawnGridPositions = {
+		{2, 2},           -- Top-left
+		{w - 1, 2},       -- Top-right
+		{2, h - 1},       -- Bottom-left
+		{w - 1, h - 1},   -- Bottom-right
+		{2, midY},        -- Mid-left
+		{w - 1, midY},    -- Mid-right
+	}
+
+	for i, gridPos in ipairs(spawnGridPositions) do
+		local spawnCFrame = MapData.GridToCFrame(gridPos[1], gridPos[2])
+		spawnCFrame = spawnCFrame * CFrame.new(0, 0.5, 0)
+
 		local spawnPart = Instance.new("Part")
 		spawnPart.Name = "MapSpawn_" .. i
 		spawnPart.Size = Vector3.new(3, 1, 3)
-		spawnPart.Position = pos + Vector3.new(0, 0.5, 0)
+		spawnPart.CFrame = spawnCFrame
 		spawnPart.Anchored = true
 		spawnPart.CanCollide = false
 		spawnPart.Transparency = 1
@@ -827,31 +987,38 @@ function MapGenerator.CreateRectBorder()
 	local borderColor = Constants.COLORS.BORDER or Color3.fromRGB(120, 160, 120)
 	local w, h = Constants.GRID_WIDTH, Constants.GRID_HEIGHT
 
-	-- Calculate grid bounds from dynamic origin
-	local gridLeft = gridOrigin.X
-	local gridRight = gridOrigin.X + w * tileSize
-	local gridTop = gridOrigin.Z
-	local gridBottom = gridOrigin.Z + h * tileSize
-	local gridY = gridOrigin.Y + wallHeight / 2
+	-- Grid dimensions in local space
+	local gridWidth = w * tileSize
+	local gridHeight = h * tileSize
 
-	-- Simple 4-wall rectangle border
+	-- Border positions in local grid space
 	local borders = {
-		-- Top wall
-		{pos = Vector3.new((gridLeft + gridRight) / 2, gridY, gridTop - wallThickness / 2),
-		 size = Vector3.new(gridRight - gridLeft + wallThickness * 2, wallHeight, wallThickness)},
-		-- Bottom wall
-		{pos = Vector3.new((gridLeft + gridRight) / 2, gridY, gridBottom + wallThickness / 2),
-		 size = Vector3.new(gridRight - gridLeft + wallThickness * 2, wallHeight, wallThickness)},
-		-- Left wall
-		{pos = Vector3.new(gridLeft - wallThickness / 2, gridY, (gridTop + gridBottom) / 2),
-		 size = Vector3.new(wallThickness, wallHeight, gridBottom - gridTop)},
-		-- Right wall
-		{pos = Vector3.new(gridRight + wallThickness / 2, gridY, (gridTop + gridBottom) / 2),
-		 size = Vector3.new(wallThickness, wallHeight, gridBottom - gridTop)},
+		-- Top wall (local negative Z)
+		{localCFrame = CFrame.new(gridWidth / 2, wallHeight / 2, -wallThickness / 2),
+		 size = Vector3.new(gridWidth + wallThickness * 2, wallHeight, wallThickness)},
+		-- Bottom wall (local positive Z)
+		{localCFrame = CFrame.new(gridWidth / 2, wallHeight / 2, gridHeight + wallThickness / 2),
+		 size = Vector3.new(gridWidth + wallThickness * 2, wallHeight, wallThickness)},
+		-- Left wall (local negative X)
+		{localCFrame = CFrame.new(-wallThickness / 2, wallHeight / 2, gridHeight / 2),
+		 size = Vector3.new(wallThickness, wallHeight, gridHeight)},
+		-- Right wall (local positive X)
+		{localCFrame = CFrame.new(gridWidth + wallThickness / 2, wallHeight / 2, gridHeight / 2),
+		 size = Vector3.new(wallThickness, wallHeight, gridHeight)},
 	}
 
 	for i, border in ipairs(borders) do
-		local wall = CreatePart(border.size, border.pos, borderColor, "Border_" .. i, true, "BorderWall")
+		local wall = Instance.new("Part")
+		wall.Size = border.size
+		wall.CFrame = gridCFrame * border.localCFrame
+		wall.Color = borderColor
+		wall.Name = "Border_" .. i
+		wall.Material = Enum.Material.SmoothPlastic
+		wall.Anchored = true
+		wall.CanCollide = true
+		wall.CastShadow = true
+		wall.TopSurface = Enum.SurfaceType.Smooth
+		wall.BottomSurface = Enum.SurfaceType.Smooth
 		CollectionService:AddTag(wall, "BorderWall")
 		wall.Parent = arenaFolder
 	end
@@ -885,6 +1052,26 @@ function MapGenerator.DestroySoftWall(wall: Instance, gridX: number, gridY: numb
 		wall:Destroy()
 		return
 	end
+
+	-- Add red highlight effect to sell the explosion
+	local highlight = Instance.new("Highlight")
+	highlight.FillColor = Color3.fromRGB(255, 50, 50) -- Red
+	highlight.OutlineColor = Color3.fromRGB(255, 100, 50) -- Orange-red
+	highlight.FillTransparency = 0.3
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+	highlight.Parent = wall
+
+	-- Flash the highlight briefly before exploding
+	task.spawn(function()
+		-- Quick flash animation
+		for i = 1, 3 do
+			highlight.FillTransparency = 0.2
+			task.wait(0.03)
+			highlight.FillTransparency = 0.5
+			task.wait(0.03)
+		end
+	end)
 
 	-- Animate each part flying apart
 	for i, part in ipairs(parts) do
@@ -932,9 +1119,9 @@ function MapGenerator.DestroySoftWall(wall: Instance, gridX: number, gridY: numb
 	particlePart.Transparency = 1
 	particlePart.Parent = Workspace
 
-	-- Wood splinter particles
+	-- Debris particles (generic color that works with city props)
 	local particles = Instance.new("ParticleEmitter")
-	particles.Color = ColorSequence.new(Color3.fromRGB(194, 155, 97)) -- Wood color
+	particles.Color = ColorSequence.new(Color3.fromRGB(200, 200, 200)) -- Light gray debris
 	particles.Size = NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 0.5),
 		NumberSequenceKeypoint.new(1, 0)

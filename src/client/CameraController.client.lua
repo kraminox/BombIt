@@ -14,20 +14,45 @@ local camera = Workspace.CurrentCamera
 -- Wait for shared modules
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Constants = require(Shared:WaitForChild("Constants"))
+local MapData = require(Shared:WaitForChild("MapData"))
+
+-- Initialize grid CFrame from Canvas (client-side)
+local function InitializeGridFromCanvas()
+	local canvasPart = Workspace:FindFirstChild("Canvas") :: BasePart?
+	if canvasPart then
+		local canvasCFrame = canvasPart.CFrame
+		local canvasSize = canvasPart.Size
+
+		-- Grid origin is at corner of canvas in local space, then transformed to world space
+		local localCorner = Vector3.new(-canvasSize.X / 2, canvasSize.Y / 2, -canvasSize.Z / 2)
+		local worldCorner = canvasCFrame:PointToWorldSpace(localCorner)
+
+		-- Create the grid CFrame: position at corner, rotation from canvas
+		local gridCFrame = CFrame.new(worldCorner) * (canvasCFrame - canvasCFrame.Position)
+		MapData.SetGridCFrame(gridCFrame)
+	end
+end
+
+-- Initialize grid on load
+InitializeGridFromCanvas()
 
 -- Wait for remotes
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local RoundStateChanged = Remotes:WaitForChild("RoundStateChanged")
 local PlayerDied = Remotes:WaitForChild("PlayerDied")
+local SyncPlayerData = Remotes:WaitForChild("SyncPlayerData")
 
--- Camera settings
-local CAMERA_HEIGHT = 22 -- Height above player
-local CAMERA_DISTANCE = 18 -- Distance behind player (more tilt to see character)
+-- Camera settings (base values)
+local BASE_CAMERA_HEIGHT = 22 -- Height above player
+local BASE_CAMERA_DISTANCE = 18 -- Distance behind player (more tilt to see character)
 local CAMERA_FOV = 50 -- More zoomed in
 
 -- Camera state
 local cameraMode = "lobby"
 local spectateTarget: Player? = nil
+local currentZoomLevel = 1.0 -- Zoom multiplier (higher = more zoomed out)
+local targetZoomLevel = 1.0 -- Target for smooth interpolation
+local ZOOM_LERP_SPEED = 3 -- How fast to animate zoom changes
 
 -- Arrow indicator
 local arrowGui: BillboardGui? = nil
@@ -156,25 +181,55 @@ local function FindNearestAlivePlayer(): Player?
 end
 
 -- Update camera based on mode
-local function UpdateCamera()
+local function UpdateCamera(deltaTime: number?)
+	-- Smoothly interpolate zoom level towards target
+	local dt = deltaTime or 0.016 -- Default to ~60fps if no deltaTime
+	if currentZoomLevel ~= targetZoomLevel then
+		local diff = targetZoomLevel - currentZoomLevel
+		local step = diff * math.min(1, ZOOM_LERP_SPEED * dt)
+		currentZoomLevel = currentZoomLevel + step
+
+		-- Snap if very close
+		if math.abs(targetZoomLevel - currentZoomLevel) < 0.001 then
+			currentZoomLevel = targetZoomLevel
+		end
+	end
+
 	if cameraMode == "lobby" then
 		camera.CameraType = Enum.CameraType.Custom
 		return
 	end
 
+	-- Apply zoom level to camera distance
+	local zoomedHeight = BASE_CAMERA_HEIGHT * currentZoomLevel
+	local zoomedDistance = BASE_CAMERA_DISTANCE * currentZoomLevel
+
 	if cameraMode == "countdown" or cameraMode == "gameplay" then
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.FieldOfView = CAMERA_FOV
 
-		-- Follow the player's character with tilted view
+		-- Follow the player's character with overhead tilted view aligned to canvas rotation
 		local character = player.Character
 		if character then
 			local hrp = character:FindFirstChild("HumanoidRootPart")
 			if hrp then
 				local targetPos = hrp.Position
-				-- Camera positioned above and behind (offset on Z axis for tilt)
-				local cameraPos = targetPos + Vector3.new(0, CAMERA_HEIGHT, CAMERA_DISTANCE)
-				camera.CFrame = CFrame.lookAt(cameraPos, targetPos)
+
+				-- Use Canvas CFrame directly to align camera with the grid
+				local canvas = Workspace:FindFirstChild("Canvas")
+				if canvas and canvas:IsA("BasePart") then
+					-- Canvas.LookVector is the direction the canvas faces (-Z in canvas local)
+					-- Position camera: above player, offset in canvas's +Z direction (behind)
+					local behindDir = -canvas.CFrame.LookVector
+					local cameraPos = targetPos + Vector3.new(0, zoomedHeight, 0) + behindDir * zoomedDistance
+
+					-- Use canvas's LookVector as up so grid edges align with screen edges
+					camera.CFrame = CFrame.lookAt(cameraPos, targetPos, canvas.CFrame.LookVector)
+				else
+					-- Fallback if canvas not found
+					local cameraPos = targetPos + Vector3.new(0, zoomedHeight, zoomedDistance)
+					camera.CFrame = CFrame.lookAt(cameraPos, targetPos)
+				end
 			end
 		end
 		return
@@ -184,7 +239,7 @@ local function UpdateCamera()
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.FieldOfView = CAMERA_FOV
 
-		-- Follow spectate target or arena center
+		-- Follow spectate target or arena center with grid-aligned view
 		local targetPos = GetArenaCenter()
 		if spectateTarget and spectateTarget.Character then
 			local hrp = spectateTarget.Character:FindFirstChild("HumanoidRootPart")
@@ -192,17 +247,28 @@ local function UpdateCamera()
 				targetPos = hrp.Position
 			end
 		end
-		local cameraPos = targetPos + Vector3.new(0, CAMERA_HEIGHT, CAMERA_DISTANCE)
-		camera.CFrame = CFrame.lookAt(cameraPos, targetPos)
+
+		-- Use Canvas CFrame directly to align camera with the grid
+		local canvas = Workspace:FindFirstChild("Canvas")
+		if canvas and canvas:IsA("BasePart") then
+			local behindDir = -canvas.CFrame.LookVector
+			local cameraPos = targetPos + Vector3.new(0, zoomedHeight, 0) + behindDir * zoomedDistance
+			camera.CFrame = CFrame.lookAt(cameraPos, targetPos, canvas.CFrame.LookVector)
+		else
+			local cameraPos = targetPos + Vector3.new(0, zoomedHeight, zoomedDistance)
+			camera.CFrame = CFrame.lookAt(cameraPos, targetPos)
+		end
 		return
 	end
 
 	if cameraMode == "winners" then
-		-- Camera looking at podium
-		local podiumCenter = Vector3.new(0, 4, 50)
+		-- Camera looking at podium (capturing all 3 positions with 1st place centered)
+		-- 1st place is at Y=9, 2nd at Y=7, 3rd at Y=5 - look at center height
+		local podiumCenter = Vector3.new(0, 7, 50)
 		camera.CameraType = Enum.CameraType.Scriptable
-		camera.CFrame = CFrame.lookAt(podiumCenter + Vector3.new(0, 8, 25), podiumCenter)
-		camera.FieldOfView = 50
+		-- Position camera higher and further back to capture tall 1st place podium
+		camera.CFrame = CFrame.lookAt(podiumCenter + Vector3.new(0, 6, 28), podiumCenter)
+		camera.FieldOfView = 55
 		return
 	end
 end
@@ -212,6 +278,8 @@ RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
 	if state == Constants.STATES.LOBBY then
 		cameraMode = "lobby"
 		camera.CameraType = Enum.CameraType.Custom
+		currentZoomLevel = 1.0 -- Reset zoom instantly
+		targetZoomLevel = 1.0
 		RemoveArrow()
 		-- Reset camera subject to local player
 		if player.Character then
@@ -219,6 +287,8 @@ RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
 		end
 	elseif state == Constants.STATES.COUNTDOWN then
 		cameraMode = "countdown"
+		currentZoomLevel = 1.0 -- Reset zoom instantly for new round
+		targetZoomLevel = 1.0
 		AttachArrowToPlayer()
 	elseif state == Constants.STATES.PLAYING then
 		cameraMode = "gameplay"
@@ -229,6 +299,8 @@ RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
 	elseif state == Constants.STATES.INTERMISSION then
 		cameraMode = "lobby"
 		camera.CameraType = Enum.CameraType.Custom
+		currentZoomLevel = 1.0 -- Reset zoom instantly
+		targetZoomLevel = 1.0
 		RemoveArrow()
 	end
 end)
@@ -236,9 +308,25 @@ end)
 -- Player death
 PlayerDied.OnClientEvent:Connect(function(userId: number)
 	if userId == player.UserId then
-		cameraMode = "spectate"
-		spectateTarget = FindNearestAlivePlayer()
+		-- Reset to normal camera with no restrictions
+		cameraMode = "freecam"
+		camera.CameraType = Enum.CameraType.Custom
+		camera.FieldOfView = 70 -- Default FOV
+		currentZoomLevel = 1.0
+		targetZoomLevel = 1.0
 		RemoveArrow()
+
+		-- Reset camera subject to player's character for free movement
+		if player.Character then
+			local humanoid = player.Character:FindFirstChild("Humanoid")
+			if humanoid then
+				camera.CameraSubject = humanoid
+				-- Reset movement to normal
+				humanoid.WalkSpeed = 16
+				humanoid.JumpPower = 50
+				humanoid.JumpHeight = 7.2
+			end
+		end
 	elseif cameraMode == "spectate" and spectateTarget and spectateTarget.UserId == userId then
 		spectateTarget = FindNearestAlivePlayer()
 	end
@@ -258,6 +346,15 @@ player.CharacterAdded:Connect(function(character)
 	end
 end)
 
+-- Listen for player data sync (for zoom level)
+SyncPlayerData.OnClientEvent:Connect(function(data)
+	if data and data.zoomLevel then
+		targetZoomLevel = data.zoomLevel
+	end
+end)
+
 -- Initialize
-RunService.RenderStepped:Connect(UpdateCamera)
+RunService.RenderStepped:Connect(function(deltaTime)
+	UpdateCamera(deltaTime)
+end)
 print("[CameraController] Bird's eye camera with arrow indicator initialized")

@@ -23,17 +23,19 @@ local PowerUpCollected = Remotes:WaitForChild("PowerUpCollected")
 local SyncPlayerData = Remotes:WaitForChild("SyncPlayerData")
 local PlaceBomb = Remotes:WaitForChild("PlaceBomb")
 
--- Cartoony color palette
+-- Vibrant color palette (matching modern Roblox UI style)
 local COLORS = {
-	PRIMARY = Color3.fromRGB(255, 107, 129),      -- Coral pink
-	SECONDARY = Color3.fromRGB(78, 205, 196),     -- Teal
-	ACCENT = Color3.fromRGB(255, 230, 109),       -- Sunny yellow
-	DARK = Color3.fromRGB(45, 52, 70),            -- Dark blue-gray
+	PRIMARY = Color3.fromRGB(255, 85, 165),       -- Hot pink
+	SECONDARY = Color3.fromRGB(85, 205, 252),     -- Bright cyan
+	ACCENT = Color3.fromRGB(255, 215, 0),         -- Golden yellow
+	DARK = Color3.fromRGB(40, 20, 60),            -- Deep purple-black
 	LIGHT = Color3.fromRGB(255, 255, 255),        -- White
-	SUCCESS = Color3.fromRGB(123, 237, 159),      -- Mint green
-	WARNING = Color3.fromRGB(255, 184, 108),      -- Peachy orange
-	DANGER = Color3.fromRGB(255, 107, 129),       -- Coral (same as primary)
-	SHADOW = Color3.fromRGB(30, 35, 50),          -- Shadow color
+	SUCCESS = Color3.fromRGB(80, 220, 100),       -- Bright green
+	WARNING = Color3.fromRGB(255, 170, 50),       -- Orange
+	DANGER = Color3.fromRGB(255, 70, 100),        -- Red-pink
+	SHADOW = Color3.fromRGB(20, 10, 40),          -- Dark shadow
+	PURPLE = Color3.fromRGB(180, 100, 255),       -- Bright purple
+	GRADIENT_DARK = Color3.fromRGB(60, 30, 80),   -- Gradient inner
 }
 
 -- UI elements
@@ -61,46 +63,47 @@ local currentStats = {
 -- Check if mobile
 local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
--- Helper: Create bubbly frame with shadow
-local function CreateBubbleFrame(name: string, size: UDim2, position: UDim2, color: Color3?): Frame
+-- Helper: Create vibrant frame with colored stroke (modern Roblox style)
+local function CreateBubbleFrame(name: string, size: UDim2, position: UDim2, strokeColor: Color3?): Frame
 	local container = Instance.new("Frame")
 	container.Name = name .. "Container"
 	container.Size = size
 	container.Position = position
 	container.BackgroundTransparency = 1
 
-	-- Shadow
-	local shadow = Instance.new("Frame")
-	shadow.Name = "Shadow"
-	shadow.Size = UDim2.new(1, 6, 1, 6)
-	shadow.Position = UDim2.new(0, 3, 0, 4)
-	shadow.BackgroundColor3 = COLORS.SHADOW
-	shadow.BackgroundTransparency = 0.5
-	shadow.ZIndex = 1
-	shadow.Parent = container
-
-	local shadowCorner = Instance.new("UICorner")
-	shadowCorner.CornerRadius = UDim.new(0, 20)
-	shadowCorner.Parent = shadow
-
-	-- Main frame
+	-- Main frame with dark inner
 	local frame = Instance.new("Frame")
 	frame.Name = name
 	frame.Size = UDim2.new(1, 0, 1, 0)
-	frame.BackgroundColor3 = color or COLORS.DARK
-	frame.BackgroundTransparency = 0.1
+	frame.BackgroundColor3 = COLORS.GRADIENT_DARK
+	frame.BackgroundTransparency = 0.15
 	frame.ZIndex = 2
 	frame.Parent = container
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 18)
+	corner.CornerRadius = UDim.new(0, 14)
 	corner.Parent = frame
 
+	-- Bold colored stroke
 	local stroke = Instance.new("UIStroke")
-	stroke.Color = COLORS.LIGHT
-	stroke.Thickness = 3
-	stroke.Transparency = 0.7
+	stroke.Color = strokeColor or COLORS.PRIMARY
+	stroke.Thickness = 4
+	stroke.Transparency = 0
 	stroke.Parent = frame
+
+	-- Inner glow/highlight at top
+	local highlight = Instance.new("Frame")
+	highlight.Name = "Highlight"
+	highlight.Size = UDim2.new(1, -8, 0, 3)
+	highlight.Position = UDim2.new(0, 4, 0, 4)
+	highlight.BackgroundColor3 = Color3.new(1, 1, 1)
+	highlight.BackgroundTransparency = 0.7
+	highlight.ZIndex = 3
+	highlight.Parent = frame
+
+	local highlightCorner = Instance.new("UICorner")
+	highlightCorner.CornerRadius = UDim.new(0, 2)
+	highlightCorner.Parent = highlight
 
 	return container
 end
@@ -161,6 +164,12 @@ local function CreateUI()
 	timerLabel.ZIndex = 3
 	timerLabel.Parent = timerContainer:FindFirstChild("Timer")
 
+	local timerStroke = Instance.new("UIStroke")
+	timerStroke.Color = COLORS.DARK
+	timerStroke.Thickness = 2
+	timerStroke.Transparency = 0.3
+	timerStroke.Parent = timerLabel
+
 	-- Stats Frame (top left) - Bubbly pills
 	statsFrame = Instance.new("Frame")
 	statsFrame.Name = "Stats"
@@ -176,22 +185,23 @@ local function CreateUI()
 	statsLayout.Padding = UDim.new(0, 8)
 	statsLayout.Parent = statsFrame
 
-	-- Create stat pills
+	-- Create stat pills (vibrant style with colored strokes)
 	local function CreateStatPill(icon: string, name: string, color: Color3): Frame
 		local pill = Instance.new("Frame")
 		pill.Name = name
-		pill.Size = UDim2.new(0, 65, 0, 45)
-		pill.BackgroundColor3 = color
-		pill.BackgroundTransparency = 0.15
+		pill.Size = UDim2.new(0, 70, 0, 50)
+		pill.BackgroundColor3 = COLORS.GRADIENT_DARK
+		pill.BackgroundTransparency = 0.1
 
 		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 22)
+		corner.CornerRadius = UDim.new(0, 12)
 		corner.Parent = pill
 
+		-- Bold colored stroke
 		local stroke = Instance.new("UIStroke")
-		stroke.Color = COLORS.LIGHT
-		stroke.Thickness = 2
-		stroke.Transparency = 0.6
+		stroke.Color = color
+		stroke.Thickness = 3
+		stroke.Transparency = 0
 		stroke.Parent = pill
 
 		local iconLabel = Instance.new("TextLabel")
@@ -215,11 +225,17 @@ local function CreateUI()
 		valueLabel.Font = Enum.Font.FredokaOne
 		valueLabel.Parent = pill
 
+		local valueStroke = Instance.new("UIStroke")
+		valueStroke.Color = COLORS.DARK
+		valueStroke.Thickness = 1.5
+		valueStroke.Transparency = 0.3
+		valueStroke.Parent = valueLabel
+
 		pill.Parent = statsFrame
 		return pill
 	end
 
-	CreateStatPill("💣", "BombStat", COLORS.DARK)
+	CreateStatPill("💣", "BombStat", COLORS.DANGER)
 	CreateStatPill("🔥", "RangeStat", COLORS.WARNING)
 	CreateStatPill("⚡", "SpeedStat", COLORS.SECONDARY)
 
@@ -394,9 +410,9 @@ local function CreateMobileControls()
 	bombCorner.Parent = bombButton
 
 	local bombStroke = Instance.new("UIStroke")
-	bombStroke.Color = COLORS.LIGHT
+	bombStroke.Color = COLORS.ACCENT
 	bombStroke.Thickness = 4
-	bombStroke.Transparency = 0.5
+	bombStroke.Transparency = 0
 	bombStroke.Parent = bombButton
 
 	-- Bomb button functionality with bounce
@@ -571,7 +587,7 @@ local function ShowCountdown(number: number, text: string?)
 	end
 end
 
--- Show power-up collection effect - Bubbly popup
+-- Show power-up collection effect - Vibrant popup with colored stroke
 local function ShowPowerUpEffect(powerUpType: string)
 	local powerUpData = Constants.POWERUP_TYPES[powerUpType]
 	if not powerUpData then
@@ -584,44 +600,84 @@ local function ShowPowerUpEffect(powerUpType: string)
 	end
 
 	local effectContainer = Instance.new("Frame")
-	effectContainer.Size = UDim2.new(0, 220, 0, 60)
-	effectContainer.Position = UDim2.new(0.5, -110, 0.75, 0)
-	effectContainer.BackgroundColor3 = powerUpData.color
-	effectContainer.BackgroundTransparency = 0.15
+	effectContainer.Size = UDim2.new(0, 240, 0, 65)
+	effectContainer.Position = UDim2.new(0.5, -120, 0.75, 0)
+	effectContainer.BackgroundColor3 = COLORS.GRADIENT_DARK
+	effectContainer.BackgroundTransparency = 0.1
+	effectContainer.ZIndex = 100
 	effectContainer.Parent = screenGui
 
 	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 25)
+	corner.CornerRadius = UDim.new(0, 14)
 	corner.Parent = effectContainer
 
+	-- Bold colored stroke matching powerup color
 	local stroke = Instance.new("UIStroke")
-	stroke.Color = COLORS.LIGHT
-	stroke.Thickness = 3
+	stroke.Color = powerUpData.color
+	stroke.Thickness = 4
+	stroke.Transparency = 0
 	stroke.Parent = effectContainer
 
+	-- Icon on the left with colored background
+	local iconFrame = Instance.new("Frame")
+	iconFrame.Size = UDim2.new(0, 50, 0, 50)
+	iconFrame.Position = UDim2.new(0, 8, 0.5, -25)
+	iconFrame.BackgroundColor3 = powerUpData.color
+	iconFrame.BackgroundTransparency = 0.2
+	iconFrame.ZIndex = 101
+	iconFrame.Parent = effectContainer
+
+	local iconCorner = Instance.new("UICorner")
+	iconCorner.CornerRadius = UDim.new(0, 10)
+	iconCorner.Parent = iconFrame
+
+	local iconLabel = Instance.new("TextLabel")
+	iconLabel.Size = UDim2.new(1, 0, 1, 0)
+	iconLabel.BackgroundTransparency = 1
+	iconLabel.Text = powerUpData.icon
+	iconLabel.TextColor3 = COLORS.LIGHT
+	iconLabel.TextSize = 28
+	iconLabel.Font = Enum.Font.GothamBold
+	iconLabel.ZIndex = 102
+	iconLabel.Parent = iconFrame
+
+	-- Name label
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.new(1, 0, 1, 0)
+	label.Size = UDim2.new(1, -70, 1, 0)
+	label.Position = UDim2.new(0, 65, 0, 0)
 	label.BackgroundTransparency = 1
-	label.Text = powerUpData.icon .. " " .. powerUpData.name .. "!"
+	label.Text = powerUpData.name .. "!"
 	label.TextColor3 = COLORS.LIGHT
-	label.TextSize = 26
+	label.TextSize = 24
 	label.Font = Enum.Font.FredokaOne
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.ZIndex = 101
 	label.Parent = effectContainer
 
+	-- Text stroke for readability
+	local textStroke = Instance.new("UIStroke")
+	textStroke.Color = COLORS.DARK
+	textStroke.Thickness = 2
+	textStroke.Transparency = 0.5
+	textStroke.Parent = label
+
 	-- Bounce in
-	effectContainer.Position = UDim2.new(0.5, -110, 0.9, 0)
-	effectContainer.Size = UDim2.new(0, 100, 0, 30)
-	BounceIn(effectContainer, "Position", UDim2.new(0.5, -110, 0.7, 0), 0.3)
-	BounceIn(effectContainer, "Size", UDim2.new(0, 220, 0, 60), 0.3)
+	effectContainer.Position = UDim2.new(0.5, -120, 0.9, 0)
+	effectContainer.Size = UDim2.new(0, 120, 0, 35)
+	BounceIn(effectContainer, "Position", UDim2.new(0.5, -120, 0.7, 0), 0.3)
+	BounceIn(effectContainer, "Size", UDim2.new(0, 240, 0, 65), 0.3)
 
 	-- Fade out and move up
-	task.delay(1.2, function()
+	task.delay(1.5, function()
 		TweenService:Create(effectContainer, TweenInfo.new(0.4), {
-			Position = UDim2.new(0.5, -110, 0.55, 0),
+			Position = UDim2.new(0.5, -120, 0.55, 0),
 			BackgroundTransparency = 1
 		}):Play()
 		TweenService:Create(label, TweenInfo.new(0.4), {TextTransparency = 1}):Play()
+		TweenService:Create(textStroke, TweenInfo.new(0.4), {Transparency = 1}):Play()
 		TweenService:Create(stroke, TweenInfo.new(0.4), {Transparency = 1}):Play()
+		TweenService:Create(iconFrame, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+		TweenService:Create(iconLabel, TweenInfo.new(0.4), {TextTransparency = 1}):Play()
 		task.delay(0.4, function()
 			effectContainer:Destroy()
 		end)

@@ -4,11 +4,11 @@
 
 local Constants = {}
 
--- Grid System (based on 90x90 canvas with 4-stud tiles)
+-- Grid System (based on 80x80 canvas with 4-stud tiles)
 Constants.TILE_SIZE = 4
-Constants.GRID_WIDTH = 22
-Constants.GRID_HEIGHT = 22
-Constants.CANVAS_SIZE = Vector3.new(90, 21, 90) -- Size of Canvas part
+Constants.GRID_WIDTH = 20
+Constants.GRID_HEIGHT = 20
+Constants.CANVAS_SIZE = Vector3.new(80, 7, 80) -- Size of Canvas part
 
 -- Movement
 Constants.MOVE_SPEED = 12 -- Base studs/second
@@ -33,7 +33,7 @@ Constants.INVINCIBILITY_FRAMES = 1.5 -- Seconds of invincibility after hit
 
 -- Map Generation
 Constants.SOFT_WALL_DENSITY = 0.55
-Constants.POWERUP_SPAWN_CHANCE = 0.25
+Constants.POWERUP_SPAWN_CHANCE = 0.45
 Constants.COIN_SPAWN_CHANCE = 0.50 -- For Coin Grab mode
 
 -- Round Timing
@@ -71,32 +71,30 @@ Constants.POWERUP_TYPES = {
 	BOMB_UP = {
 		id = "BOMB_UP",
 		name = "+1 Bomb",
-		color = Color3.fromRGB(255, 165, 0), -- Orange
+		mesh = "Bomb", -- ReplicatedStorage/Assets/Powerups/Bomb
 		icon = "💣",
+		color = Color3.fromRGB(255, 100, 100), -- Red
 	},
 	FIRE_UP = {
 		id = "FIRE_UP",
 		name = "+1 Range",
-		color = Color3.fromRGB(255, 50, 50), -- Red
+		mesh = "Arrow", -- ReplicatedStorage/Assets/Powerups/Arrow
 		icon = "🔥",
+		color = Color3.fromRGB(255, 165, 0), -- Orange
 	},
 	SPEED_UP = {
 		id = "SPEED_UP",
 		name = "Speed Boost",
-		color = Color3.fromRGB(255, 255, 0), -- Yellow
+		mesh = "Lightning", -- ReplicatedStorage/Assets/Powerups/Lightning
 		icon = "⚡",
+		color = Color3.fromRGB(255, 255, 0), -- Yellow
 	},
-	SHIELD = {
-		id = "SHIELD",
-		name = "Shield",
-		color = Color3.fromRGB(0, 255, 255), -- Cyan
-		icon = "🛡️",
-	},
-	SKULL = {
-		id = "SKULL",
-		name = "Curse",
-		color = Color3.fromRGB(148, 0, 211), -- Purple
-		icon = "💀",
+	ZOOM_OUT = {
+		id = "ZOOM_OUT",
+		name = "Zoom Out",
+		mesh = "Shades", -- ReplicatedStorage/Assets/Powerups/Shades
+		icon = "🕶️",
+		color = Color3.fromRGB(150, 200, 255), -- Light blue
 	},
 }
 

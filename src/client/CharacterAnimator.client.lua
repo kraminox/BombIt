@@ -41,82 +41,9 @@ local isHoldingBomb = false
 local bombCount = 1
 local activeBombs = 0
 
--- Create a bomb model to attach to character
-local function CreateHeldBomb(): Model
-	local bomb = Instance.new("Model")
-	bomb.Name = "HeldBomb"
-
-	-- Main bomb sphere
-	local sphere = Instance.new("Part")
-	sphere.Name = "Sphere"
-	sphere.Shape = Enum.PartType.Ball
-	sphere.Size = Vector3.new(1.8, 1.8, 1.8)
-	sphere.Color = Color3.fromRGB(30, 30, 30)
-	sphere.Material = Enum.Material.SmoothPlastic
-	sphere.CanCollide = false
-	sphere.Massless = true
-	sphere.Parent = bomb
-
-	-- Fuse
-	local fuse = Instance.new("Part")
-	fuse.Name = "Fuse"
-	fuse.Size = Vector3.new(0.15, 0.4, 0.15)
-	fuse.Color = Color3.fromRGB(139, 90, 43)
-	fuse.Material = Enum.Material.Fabric
-	fuse.CanCollide = false
-	fuse.Massless = true
-	fuse.Parent = bomb
-
-	-- Weld fuse to sphere
-	local fuseWeld = Instance.new("Weld")
-	fuseWeld.Part0 = sphere
-	fuseWeld.Part1 = fuse
-	fuseWeld.C0 = CFrame.new(0, 0.9, 0)
-	fuseWeld.Parent = fuse
-
-	-- Fuse spark (particle)
-	local spark = Instance.new("ParticleEmitter")
-	spark.Name = "Spark"
-	spark.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
-	spark.Size = NumberSequence.new(0.2, 0)
-	spark.Lifetime = NumberRange.new(0.2, 0.4)
-	spark.Rate = 20
-	spark.Speed = NumberRange.new(1, 2)
-	spark.SpreadAngle = Vector2.new(30, 30)
-	spark.Parent = fuse
-
-	-- Point light for glow
-	local light = Instance.new("PointLight")
-	light.Color = Color3.fromRGB(255, 150, 0)
-	light.Brightness = 1
-	light.Range = 4
-	light.Parent = fuse
-
-	bomb.PrimaryPart = sphere
-	return bomb
-end
-
--- Attach bomb to character's torso
-local function AttachBombToCharacter(character: Model)
-	if heldBombModel then
-		heldBombModel:Destroy()
-	end
-
-	local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
-	if not torso then return end
-
-	heldBombModel = CreateHeldBomb()
-
-	-- Weld bomb to torso (in front of chest, slightly above)
-	local weld = Instance.new("Weld")
-	weld.Part0 = torso
-	weld.Part1 = heldBombModel.PrimaryPart
-	-- Adjust position: (X = left/right, Y = up/down, Z = front/back relative to torso)
-	-- Custom character has different front direction, so use X axis for "front"
-	weld.C0 = CFrame.new(-1, 0.5, 0)
-	weld.Parent = heldBombModel.PrimaryPart
-
-	heldBombModel.Parent = character
+-- Find the server-created held bomb on character
+local function FindHeldBomb(character: Model): Model?
+	return character:FindFirstChild("HeldBomb")
 end
 
 -- Show/hide the held bomb
@@ -221,10 +148,10 @@ local function LoadAnimations(character: Model)
 		end
 	end
 
-	-- Create and attach held bomb model
-	AttachBombToCharacter(character)
-	SetBombVisible(false) -- Start hidden
+	-- Find server-created held bomb model
+	heldBombModel = FindHeldBomb(character)
 
+	-- Bomb visibility is handled by server, just track reference
 	-- Check initial bomb state
 	UpdateHoldBombState()
 end
@@ -285,17 +212,17 @@ local function UpdateAnimations()
 	local velocity = hrp.AssemblyLinearVelocity
 	local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
 
-	if horizontalSpeed > 0.5 then
-		-- Moving
+	if horizontalSpeed > 1.5 then
+		-- Moving - higher threshold to stop animation sooner
 		if horizontalSpeed > 14 and tracks["run"] then
 			PlayMovementAnimation("run")
 		else
 			PlayMovementAnimation("walk")
 		end
 	else
-		-- Stopped - stop movement animations
+		-- Stopped - stop movement animations immediately
 		if currentMovementTrack and currentMovementTrack.IsPlaying then
-			currentMovementTrack:Stop(0.3)
+			currentMovementTrack:Stop(0.05) -- Very fast fade out
 			currentMovementTrack = nil
 		end
 	end
@@ -351,5 +278,38 @@ end)
 
 -- Update loop
 RunService.Heartbeat:Connect(UpdateAnimations)
+
+-- Fix Highlight visibility through walls
+local function FixHighlightDepthMode()
+	local function setOccluded(highlight: Highlight)
+		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+	end
+
+	-- Fix highlights in ReplicatedStorage/Assets
+	local Assets = ReplicatedStorage:FindFirstChild("Assets")
+	if Assets then
+		for _, desc in ipairs(Assets:GetDescendants()) do
+			if desc:IsA("Highlight") then
+				setOccluded(desc)
+			end
+		end
+	end
+
+	-- Fix highlights in Workspace
+	for _, desc in ipairs(game.Workspace:GetDescendants()) do
+		if desc:IsA("Highlight") then
+			setOccluded(desc)
+		end
+	end
+
+	-- Listen for new highlights
+	game.Workspace.DescendantAdded:Connect(function(desc)
+		if desc:IsA("Highlight") then
+			setOccluded(desc)
+		end
+	end)
+end
+
+FixHighlightDepthMode()
 
 print("[CharacterAnimator] Initialized with custom animations")

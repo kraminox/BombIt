@@ -25,10 +25,37 @@ local RoundSystem
 local PowerUpService
 local MapGenerator
 
+-- VFX template
+local VFXFolder = ReplicatedStorage:FindFirstChild("VFX")
+local ParticleTemplate = VFXFolder and VFXFolder:FindFirstChild("ParticleTemplate")
+
+if not ParticleTemplate then
+	warn("[BombService] ParticleTemplate not found at ReplicatedStorage.VFX.ParticleTemplate!")
+end
+
+-- Warning indicator template
+local AssetsFolder = ReplicatedStorage:FindFirstChild("Assets")
+local MiscFolder = AssetsFolder and AssetsFolder:FindFirstChild("Misc")
+local WarningTemplate = MiscFolder and MiscFolder:FindFirstChild("Warning")
+
+if not WarningTemplate then
+	warn("[BombService] Warning template not found at ReplicatedStorage.Assets.Misc.Warning!")
+end
+
+-- Sound effects
+local SoundsFolder = ReplicatedStorage:FindFirstChild("Sounds")
+local SoundVFXFolder = SoundsFolder and SoundsFolder:FindFirstChild("VFX")
+local ExplosionSound = SoundVFXFolder and SoundVFXFolder:FindFirstChild("Explosion")
+local DropSound = SoundVFXFolder and SoundVFXFolder:FindFirstChild("Drop")
+
+-- Colors
+local DANGER_COLOR = Color3.fromRGB(255, 140, 50) -- Orange danger floor
+local NORMAL_FLOOR_COLOR = Color3.fromRGB(76, 175, 80) -- Normal green floor (from Canvas)
+
 -- Active bombs tracking
-local activeBombs = {} :: {[string]: {model: Model, gridX: number, gridY: number, ownerId: number, range: number}}
+local activeBombs = {} :: {[string]: {model: Model, gridX: number, gridY: number, ownerId: number, range: number, dangerTiles: {Part}}}
 local bombPool = {} :: {Model}
-local explosionPool = {} :: {Part}
+local dangerTilePool = {} :: {Part}
 
 -- Create bomb model template
 local function CreateBombModel(): Model
@@ -72,18 +99,63 @@ local function CreateBombModel(): Model
 	return bomb
 end
 
--- Create explosion effect part
-local function CreateExplosionPart(): Part
+-- Create danger tile indicator using Warning template
+local function CreateDangerTile(): Part
+	if WarningTemplate then
+		local warning = WarningTemplate:Clone()
+		warning.Name = "DangerTile"
+		warning.Anchored = true
+		warning.CanCollide = false
+		warning.CastShadow = false
+		-- Set decal transparency to 1 (invisible) initially
+		local decal = warning:FindFirstChild("Decal")
+		if decal and decal:IsA("Decal") then
+			decal.Transparency = 1
+		end
+		return warning
+	end
+
+	-- Fallback to basic part
 	local part = Instance.new("Part")
-	part.Name = "Explosion"
-	part.Size = Vector3.new(Constants.TILE_SIZE, 0.5, Constants.TILE_SIZE)
-	part.Color = Constants.COLORS.EXPLOSION
+	part.Name = "DangerTile"
+	part.Size = Vector3.new(Constants.TILE_SIZE - 0.1, 0.15, Constants.TILE_SIZE - 0.1)
+	part.Color = DANGER_COLOR
 	part.Material = Enum.Material.Neon
-	part.Transparency = 0
+	part.Transparency = 0.5
 	part.Anchored = true
 	part.CanCollide = false
 	part.CastShadow = false
 	return part
+end
+
+-- Danger tiles folder (for client-side visibility control)
+local dangerTilesFolder: Folder? = nil
+
+-- Get or create the danger tiles folder
+local function GetDangerTilesFolder(): Folder
+	if dangerTilesFolder and dangerTilesFolder.Parent then
+		return dangerTilesFolder
+	end
+
+	local arenaFolder = Workspace:FindFirstChild("Arena")
+	if arenaFolder then
+		dangerTilesFolder = arenaFolder:FindFirstChild("DangerTiles") :: Folder?
+		if not dangerTilesFolder then
+			dangerTilesFolder = Instance.new("Folder")
+			dangerTilesFolder.Name = "DangerTiles"
+			dangerTilesFolder.Parent = arenaFolder
+		end
+	else
+		-- Fallback to Workspace
+		dangerTilesFolder = Workspace:FindFirstChild("DangerTiles") :: Folder?
+		if not dangerTilesFolder then
+			dangerTilesFolder = Instance.new("Folder")
+			dangerTilesFolder.Name = "DangerTiles"
+			dangerTilesFolder.Parent = Workspace
+		end
+	end
+
+	return dangerTilesFolder :: Folder
 end
 
 -- Initialize bomb and explosion pools
@@ -100,11 +172,11 @@ function BombService.Initialize()
 		table.insert(bombPool, bomb)
 	end
 
-	-- Create explosion pool
+	-- Create danger tile pool
 	for _ = 1, Constants.MAX_EXPLOSION_POOL do
-		local explosion = CreateExplosionPart()
-		explosion.Parent = ReplicatedStorage
-		table.insert(explosionPool, explosion)
+		local dangerTile = CreateDangerTile()
+		dangerTile.Parent = ReplicatedStorage
+		table.insert(dangerTilePool, dangerTile)
 	end
 
 	-- Handle bomb placement requests
@@ -112,7 +184,7 @@ function BombService.Initialize()
 		BombService.TryPlaceBomb(player)
 	end)
 
-	print("[BombService] Initialized with " .. #bombPool .. " bombs and " .. #explosionPool .. " explosion effects")
+	print("[BombService] Initialized with " .. #bombPool .. " bombs and " .. #dangerTilePool .. " danger tiles")
 end
 
 -- Get a bomb from pool or create new
@@ -129,19 +201,27 @@ local function ReturnBombToPool(bomb: Model)
 	table.insert(bombPool, bomb)
 end
 
--- Get explosion part from pool
-local function GetExplosionFromPool(): Part
-	if #explosionPool > 0 then
-		return table.remove(explosionPool) :: Part
+-- Get danger tile from pool
+local function GetDangerTileFromPool(): Part
+	if #dangerTilePool > 0 then
+		return table.remove(dangerTilePool) :: Part
 	end
-	return CreateExplosionPart()
+	return CreateDangerTile()
 end
 
--- Return explosion part to pool
-local function ReturnExplosionToPool(part: Part)
-	part.Transparency = 0
+-- Return danger tile to pool
+local function ReturnDangerTileToPool(part: Part)
+	-- Reset decal transparency if using Warning template
+	local decal = part:FindFirstChild("Decal")
+	if decal and decal:IsA("Decal") then
+		decal.Transparency = 1
+	else
+		-- Fallback for basic parts
+		part.Transparency = 0.5
+		part.Color = DANGER_COLOR
+	end
 	part.Parent = ReplicatedStorage
-	table.insert(explosionPool, part)
+	table.insert(dangerTilePool, part)
 end
 
 -- Generate unique bomb key
@@ -184,9 +264,29 @@ function BombService.PlaceBomb(player: Player, gridX: number, gridY: number, ran
 	local playerData = GameState.players[player.UserId]
 	if not playerData then return end
 
+	local arenaFolder = Workspace:FindFirstChild("Arena")
+	if not arenaFolder then return end
+
+	local worldPos = MapData.GridToWorld(gridX, gridY)
+
+	-- Play drop sound immediately
+	if DropSound then
+		local soundPart = Instance.new("Part")
+		soundPart.Anchored = true
+		soundPart.CanCollide = false
+		soundPart.Transparency = 1
+		soundPart.Size = Vector3.new(1, 1, 1)
+		soundPart.Position = worldPos + Vector3.new(0, 1, 0)
+		soundPart.Parent = arenaFolder
+
+		local sound = DropSound:Clone()
+		sound.Parent = soundPart
+		sound:Play()
+		Debris:AddItem(soundPart, sound.TimeLength + 0.5)
+	end
+
 	-- Get bomb from pool
 	local bomb = GetBombFromPool()
-	local worldPos = MapData.GridToWorld(gridX, gridY)
 
 	-- Position bomb
 	local sphere = bomb:FindFirstChild("Sphere") :: Part
@@ -200,10 +300,49 @@ function BombService.PlaceBomb(player: Player, gridX: number, gridY: number, ran
 		end
 	end
 
-	bomb.Parent = Workspace:FindFirstChild("Arena")
+	bomb.Parent = arenaFolder
 
 	-- Update grid
 	MapData.SetBomb(gridX, gridY, true)
+
+	-- Get affected tiles and show danger indicators
+	local affectedTiles = MapData.GetExplosionTiles(gridX, gridY, range)
+	local dangerTiles = {}
+	local dangerFolder = GetDangerTilesFolder()
+
+	for _, tile in ipairs(affectedTiles) do
+		local tileCFrame = MapData.GridToCFrame(tile.x, tile.y)
+		local dangerTile = GetDangerTileFromPool()
+		dangerTile.CFrame = tileCFrame * CFrame.new(0, 0.1, 0)
+		dangerTile.Parent = dangerFolder
+
+		-- Get decal for animation
+		local decal = dangerTile:FindFirstChild("Decal")
+
+		-- Blinking animation (fade decal in and out)
+		task.spawn(function()
+			while dangerTile and dangerTile.Parent == dangerFolder do
+				if decal and decal:IsA("Decal") then
+					-- Fade in
+					TweenService:Create(decal, TweenInfo.new(0.2), {Transparency = 0.2}):Play()
+					task.wait(0.25)
+					if not dangerTile or dangerTile.Parent ~= dangerFolder then break end
+					-- Fade out
+					TweenService:Create(decal, TweenInfo.new(0.2), {Transparency = 0.7}):Play()
+					task.wait(0.25)
+				else
+					-- Fallback for basic parts
+					TweenService:Create(dangerTile, TweenInfo.new(0.2), {Transparency = 0.2}):Play()
+					task.wait(0.25)
+					if not dangerTile or dangerTile.Parent ~= dangerFolder then break end
+					TweenService:Create(dangerTile, TweenInfo.new(0.2), {Transparency = 0.6}):Play()
+					task.wait(0.25)
+				end
+			end
+		end)
+
+		table.insert(dangerTiles, dangerTile)
+	end
 
 	-- Track bomb
 	local bombKey = GetBombKey(gridX, gridY)
@@ -213,6 +352,7 @@ function BombService.PlaceBomb(player: Player, gridX: number, gridY: number, ran
 		gridY = gridY,
 		ownerId = player.UserId,
 		range = range,
+		dangerTiles = dangerTiles,
 	}
 
 	-- Update player bomb count
@@ -231,7 +371,7 @@ function BombService.PlaceBomb(player: Player, gridX: number, gridY: number, ran
 	local light = bomb:FindFirstChild("Fuse") and bomb.Fuse:FindFirstChild("FuseLight")
 	if light then
 		task.spawn(function()
-			while bomb.Parent == Workspace:FindFirstChild("Arena") do
+			while bomb.Parent == arenaFolder do
 				light.Brightness = math.random(1, 3)
 				task.wait(0.1)
 			end
@@ -254,6 +394,7 @@ function BombService.ExplodeBomb(bombKey: string)
 	local gridY = bombData.gridY
 	local range = bombData.range
 	local ownerId = bombData.ownerId
+	local dangerTiles = bombData.dangerTiles or {}
 
 	-- Remove from tracking
 	activeBombs[bombKey] = nil
@@ -276,31 +417,92 @@ function BombService.ExplodeBomb(bombKey: string)
 
 	-- Get affected tiles
 	local affectedTiles = MapData.GetExplosionTiles(gridX, gridY, range)
+	local arenaFolder = Workspace:FindFirstChild("Arena")
 
-	-- Create explosion effects and check for hits
-	for _, tile in ipairs(affectedTiles) do
-		BombService.CreateExplosionAt(tile.x, tile.y, ownerId)
+	-- Play explosion sound at bomb position
+	if ExplosionSound and arenaFolder then
+		local sound = ExplosionSound:Clone()
+		local soundPart = Instance.new("Part")
+		soundPart.Anchored = true
+		soundPart.CanCollide = false
+		soundPart.Transparency = 1
+		soundPart.Size = Vector3.new(1, 1, 1)
+		soundPart.Position = MapData.GridToWorld(gridX, gridY) + Vector3.new(0, 1, 0)
+		soundPart.Parent = arenaFolder
+		sound.Parent = soundPart
+		sound:Play()
+		Debris:AddItem(soundPart, sound.TimeLength + 0.5)
 	end
 
-	-- Play explosion sound (clients handle this via CollectionService)
+	-- Spawn VFX on ALL tiles simultaneously
+	if ParticleTemplate then
+		for _, tile in ipairs(affectedTiles) do
+			local worldPos = MapData.GridToWorld(tile.x, tile.y)
+
+			local vfx = ParticleTemplate:Clone()
+			vfx.Position = worldPos + Vector3.new(0, 1, 0)
+			vfx.Anchored = true
+			vfx.CanCollide = false
+			vfx.Transparency = 1
+			vfx.Parent = arenaFolder
+
+			-- Enable all particle emitters
+			for _, emitter in ipairs(vfx:GetDescendants()) do
+				if emitter:IsA("ParticleEmitter") then
+					emitter.Enabled = true
+				end
+			end
+
+			-- Disable after 0.3s, destroy after 1.5s
+			task.delay(0.3, function()
+				if vfx and vfx.Parent then
+					for _, emitter in ipairs(vfx:GetDescendants()) do
+						if emitter:IsA("ParticleEmitter") then
+							emitter.Enabled = false
+						end
+					end
+				end
+			end)
+
+			Debris:AddItem(vfx, 1.5)
+		end
+	end
+
+	-- Fade out danger tiles and return to pool
+	for _, dangerTile in ipairs(dangerTiles) do
+		if dangerTile and dangerTile.Parent then
+			local decal = dangerTile:FindFirstChild("Decal")
+			if decal and decal:IsA("Decal") then
+				-- Fade out decal
+				local tween = TweenService:Create(decal, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+					Transparency = 1
+				})
+				tween:Play()
+				tween.Completed:Connect(function()
+					ReturnDangerTileToPool(dangerTile)
+				end)
+			else
+				-- Fallback for basic parts
+				local tween = TweenService:Create(dangerTile, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+					Transparency = 1
+				})
+				tween:Play()
+				tween.Completed:Connect(function()
+					ReturnDangerTileToPool(dangerTile)
+				end)
+			end
+		end
+	end
+
+	-- Check for hits on all affected tiles
+	for _, tile in ipairs(affectedTiles) do
+		BombService.ProcessExplosionTile(tile.x, tile.y, ownerId)
+	end
 end
 
-function BombService.CreateExplosionAt(gridX: number, gridY: number, ownerId: number)
-	local worldPos = MapData.GridToWorld(gridX, gridY)
-
-	-- Create visual effect
-	local explosionPart = GetExplosionFromPool()
-	explosionPart.Position = worldPos + Vector3.new(0, 0.5, 0)
-	explosionPart.Parent = Workspace:FindFirstChild("Arena")
-
-	-- Fade out animation
-	local tween = TweenService:Create(explosionPart, TweenInfo.new(Constants.EXPLOSION_DURATION, Enum.EasingStyle.Linear), {
-		Transparency = 1
-	})
-	tween:Play()
-	tween.Completed:Connect(function()
-		ReturnExplosionToPool(explosionPart)
-	end)
+-- Process explosion tile (damage, destruction, chain reactions - NO VFX here)
+function BombService.ProcessExplosionTile(gridX: number, gridY: number, ownerId: number)
+	local arenaFolder = Workspace:FindFirstChild("Arena")
 
 	-- Check for chain reaction (other bombs)
 	local bombKey = GetBombKey(gridX, gridY)
@@ -312,7 +514,6 @@ function BombService.CreateExplosionAt(gridX: number, gridY: number, ownerId: nu
 	end
 
 	-- Check for soft wall destruction
-	local arenaFolder = Workspace:FindFirstChild("Arena")
 	if arenaFolder then
 		for _, obj in ipairs(CollectionService:GetTagged("SoftWall")) do
 			if obj:IsDescendantOf(arenaFolder) then
@@ -362,12 +563,46 @@ function BombService.CreateExplosionAt(gridX: number, gridY: number, ownerId: nu
 		end
 	end
 
-	-- Check for powerup destruction
+	-- Check for powerup destruction (handles both BasePart and Model powerups)
 	for _, obj in ipairs(CollectionService:GetTagged("PowerUp")) do
-		if obj:IsA("BasePart") and obj:IsDescendantOf(arenaFolder) then
-			local powerX, powerY = MapData.WorldToGrid(obj.Position)
-			if powerX == gridX and powerY == gridY then
-				obj:Destroy()
+		if obj:IsDescendantOf(arenaFolder) then
+			local pos: Vector3?
+			if obj:IsA("BasePart") then
+				pos = obj.Position
+			elseif obj:IsA("Model") then
+				local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+				if part then
+					pos = part.Position
+				end
+			end
+
+			if pos then
+				local powerX, powerY = MapData.WorldToGrid(pos)
+				if powerX == gridX and powerY == gridY then
+					obj:Destroy()
+				end
+			end
+		end
+	end
+
+	-- Check for coin destruction
+	for _, obj in ipairs(CollectionService:GetTagged("Coin")) do
+		if obj:IsDescendantOf(arenaFolder) then
+			local pos: Vector3?
+			if obj:IsA("BasePart") then
+				pos = obj.Position
+			elseif obj:IsA("Model") then
+				local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+				if part then
+					pos = part.Position
+				end
+			end
+
+			if pos then
+				local coinX, coinY = MapData.WorldToGrid(pos)
+				if coinX == gridX and coinY == gridY then
+					obj:Destroy()
+				end
 			end
 		end
 	end
@@ -377,6 +612,15 @@ function BombService.ClearAllBombs()
 	for bombKey, bombData in pairs(activeBombs) do
 		MapData.SetBomb(bombData.gridX, bombData.gridY, false)
 		ReturnBombToPool(bombData.model)
+
+		-- Clean up danger tiles
+		if bombData.dangerTiles then
+			for _, dangerTile in ipairs(bombData.dangerTiles) do
+				if dangerTile and dangerTile.Parent then
+					ReturnDangerTileToPool(dangerTile)
+				end
+			end
+		end
 	end
 	activeBombs = {}
 

@@ -189,8 +189,11 @@ function RoundSystem.SetState(newState: string)
 end
 
 function RoundSystem.OnPlayerAdded(player: Player)
-	-- Spawn player in lobby
-	RoundSystem.SpawnPlayerInLobby(player)
+	-- Wait a moment for player to fully load
+	task.wait(0.5)
+
+	-- Let player spawn naturally as their avatar on SpawnLocation in lobby
+	-- Don't force custom character here
 
 	-- Sync current game state
 	RoundStateChanged:FireClient(player, GameState.currentState, {
@@ -207,30 +210,21 @@ function RoundSystem.OnPlayerRemoved(player: Player)
 end
 
 function RoundSystem.SpawnPlayerInLobby(player: Player)
-	-- Create a simple spawn location in lobby
-	local lobbyFolder = Workspace:FindFirstChild("Lobby")
-	if not lobbyFolder then return end
-
-	local spawnPart = lobbyFolder:FindFirstChild("SpawnLocation")
-	if spawnPart then
-		local character = player.Character
-		if character then
-			local hrp = character:FindFirstChild("HumanoidRootPart")
-			if hrp then
-				local offset = Vector3.new(math.random(-5, 5), 3, math.random(-5, 5))
-				hrp.CFrame = spawnPart.CFrame + offset
-			end
-		end
-	end
+	-- Load the player's regular Roblox avatar
+	-- They will spawn on a SpawnLocation in the lobby automatically
+	player:LoadCharacter()
 end
 
 function RoundSystem.SpawnPlayersInArena()
-	local spawnPositions = MapData.GetSpawnPositions()
 	local playerList = Players:GetPlayers()
+	local arena = Workspace:FindFirstChild("Arena")
 
 	for i, player in ipairs(playerList) do
-		local spawnIndex = ((i - 1) % #spawnPositions) + 1
-		local spawnPos = spawnPositions[spawnIndex]
+		-- Find MapSpawn part for this player
+		local spawnPart = arena and arena:FindFirstChild("MapSpawn_" .. i)
+		if not spawnPart then
+			spawnPart = arena and arena:FindFirstChild("MapSpawn_1")
+		end
 
 		-- Reset player data for round
 		local playerData = GameState.players[player.UserId]
@@ -241,10 +235,21 @@ function RoundSystem.SpawnPlayersInArena()
 
 		-- Create or get character
 		local character = RoundSystem.GetOrCreateCharacter(player)
-		if character then
+		if character and spawnPart then
 			local hrp = character:FindFirstChild("HumanoidRootPart")
 			if hrp then
-				hrp.CFrame = CFrame.new(spawnPos + Vector3.new(0, 3, 0))
+				-- Spawn at MapSpawn position with grid rotation
+				local spawnY = spawnPart.Position.Y + (spawnPart.Size.Y / 2)
+				-- Use spawnPart's rotation (which is aligned with grid)
+				local spawnCFrame = CFrame.new(spawnPart.Position.X, spawnY, spawnPart.Position.Z)
+				-- Apply rotation from spawnPart (just the Y rotation)
+				local _, rotY, _ = spawnPart.CFrame:ToEulerAnglesYXZ()
+				hrp.CFrame = spawnCFrame * CFrame.Angles(0, rotY, 0)
+			end
+
+			-- Update character stats for nameplate UI
+			if playerData then
+				RoundSystem.UpdateCharacterStats(player, playerData)
 			end
 
 			-- Set up death handling
@@ -291,12 +296,12 @@ function RoundSystem.GetOrCreateCharacter(player: Player): Model?
 	if humanoid then
 		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None -- Hide name overhead
 
-		-- Responsive movement settings (no ice physics)
+		-- Responsive movement settings
 		humanoid.WalkSpeed = 16
 		humanoid.JumpPower = 0 -- No jumping in game
 		humanoid.JumpHeight = 0
-		humanoid.HipHeight = 2 -- Adjust based on character model
-		humanoid.MaxSlopeAngle = 89 -- Can walk on steep slopes
+		humanoid.HipHeight = 0 -- Let character sit on ground properly
+		humanoid.MaxSlopeAngle = 45 -- Prevent climbing walls
 	end
 
 	-- Ensure HumanoidRootPart exists and is set as PrimaryPart
@@ -329,13 +334,115 @@ function RoundSystem.GetOrCreateCharacter(player: Player): Model?
 		end
 	end
 
+	-- Create held bomb model (server-side so all players see it)
+	local heldBomb = RoundSystem.CreateHeldBomb()
+	if heldBomb then
+		local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
+		if torso then
+			local weld = Instance.new("Weld")
+			weld.Part0 = torso
+			weld.Part1 = heldBomb.PrimaryPart
+			weld.C0 = CFrame.new(-1, 0.5, 0)
+			weld.Parent = heldBomb.PrimaryPart
+			heldBomb.Parent = character
+		end
+	end
+
 	-- Parent to Workspace and assign to player
 	character.Parent = Workspace
 	player.Character = character
 
+	-- Create stats folder for client UI to read
+	local statsFolder = Instance.new("Folder")
+	statsFolder.Name = "PlayerStats"
+	statsFolder.Parent = character
+
+	local bombCountVal = Instance.new("IntValue")
+	bombCountVal.Name = "BombCount"
+	bombCountVal.Value = Constants.MAX_BOMBS_DEFAULT
+	bombCountVal.Parent = statsFolder
+
+	local bombRangeVal = Instance.new("IntValue")
+	bombRangeVal.Name = "BombRange"
+	bombRangeVal.Value = Constants.BOMB_DEFAULT_RANGE
+	bombRangeVal.Parent = statsFolder
+
+	local speedVal = Instance.new("IntValue")
+	speedVal.Name = "Speed"
+	speedVal.Value = Constants.MOVE_SPEED
+	speedVal.Parent = statsFolder
+
 	-- Animations are handled client-side by CharacterAnimator.client.lua
 
 	return character
+end
+
+-- Update character stat values (for nameplate UI)
+function RoundSystem.UpdateCharacterStats(player: Player, playerData: any)
+	local character = player.Character
+	if not character then return end
+
+	local statsFolder = character:FindFirstChild("PlayerStats")
+	if not statsFolder then return end
+
+	local bombCount = statsFolder:FindFirstChild("BombCount")
+	if bombCount then bombCount.Value = playerData.bombCount or Constants.MAX_BOMBS_DEFAULT end
+
+	local bombRange = statsFolder:FindFirstChild("BombRange")
+	if bombRange then bombRange.Value = playerData.bombRange or Constants.BOMB_DEFAULT_RANGE end
+
+	local speed = statsFolder:FindFirstChild("Speed")
+	if speed then speed.Value = playerData.speed or Constants.MOVE_SPEED end
+end
+
+-- Create a bomb model to hold
+function RoundSystem.CreateHeldBomb(): Model
+	local bomb = Instance.new("Model")
+	bomb.Name = "HeldBomb"
+
+	local sphere = Instance.new("Part")
+	sphere.Name = "Sphere"
+	sphere.Shape = Enum.PartType.Ball
+	sphere.Size = Vector3.new(1.8, 1.8, 1.8)
+	sphere.Color = Color3.fromRGB(30, 30, 30)
+	sphere.Material = Enum.Material.SmoothPlastic
+	sphere.CanCollide = false
+	sphere.Massless = true
+	sphere.Parent = bomb
+
+	local fuse = Instance.new("Part")
+	fuse.Name = "Fuse"
+	fuse.Size = Vector3.new(0.15, 0.4, 0.15)
+	fuse.Color = Color3.fromRGB(139, 90, 43)
+	fuse.Material = Enum.Material.Fabric
+	fuse.CanCollide = false
+	fuse.Massless = true
+	fuse.Parent = bomb
+
+	local fuseWeld = Instance.new("Weld")
+	fuseWeld.Part0 = sphere
+	fuseWeld.Part1 = fuse
+	fuseWeld.C0 = CFrame.new(0, 0.9, 0)
+	fuseWeld.Parent = fuse
+
+	local spark = Instance.new("ParticleEmitter")
+	spark.Name = "Spark"
+	spark.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
+	spark.Size = NumberSequence.new(0.2, 0)
+	spark.Lifetime = NumberRange.new(0.2, 0.4)
+	spark.Rate = 20
+	spark.Speed = NumberRange.new(1, 2)
+	spark.SpreadAngle = Vector2.new(30, 30)
+	spark.Parent = fuse
+
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 150, 0)
+	light.Brightness = 1
+	light.Range = 4
+	light.Parent = fuse
+
+	bomb.PrimaryPart = sphere
+	return bomb
 end
 
 function RoundSystem.OnPlayerDeath(player: Player)
@@ -507,6 +614,13 @@ function RoundSystem.GameLoop()
 	while true do
 		-- LOBBY STATE
 		RoundSystem.SetState(Constants.STATES.LOBBY)
+
+		-- Show Canvas part in lobby
+		local canvas = Workspace:FindFirstChild("Canvas")
+		if canvas and canvas:IsA("BasePart") then
+			canvas.Transparency = 0
+		end
+
 		local waitStart = tick()
 
 		while GameState.GetPlayerCount() < Constants.MIN_PLAYERS do
@@ -519,20 +633,21 @@ function RoundSystem.GameLoop()
 
 		-- Wait for more players or timeout
 		local lobbyTimer = Constants.LOBBY_WAIT_TIME
-		while lobbyTimer > 0 and GameState.GetPlayerCount() < Constants.MAX_PLAYERS do
+		while lobbyTimer > 0 do
 			roundTimer = lobbyTimer
 			RoundStateChanged:FireAllClients("Timer", {timer = lobbyTimer})
 			task.wait(1)
 			lobbyTimer = lobbyTimer - 1
-
-			-- Start early if enough players
-			if GameState.GetPlayerCount() >= Constants.MIN_PLAYERS and lobbyTimer <= 15 then
-				break
-			end
 		end
 
 		-- Generate new map (skip character select)
 		MapGenerator.GenerateMap()
+
+		-- Hide Canvas part since arena floor is now generated
+		local canvas = Workspace:FindFirstChild("Canvas")
+		if canvas and canvas:IsA("BasePart") then
+			canvas.Transparency = 1
+		end
 
 		-- COUNTDOWN STATE
 		RoundSystem.SetState(Constants.STATES.COUNTDOWN)
@@ -607,9 +722,9 @@ function RoundSystem.GameLoop()
 		BombService.ClearAllBombs()
 		PowerUpService.ClearAllPowerUps()
 
-		-- Respawn all players and teleport top 3 to podium
+		-- Spawn game characters for podium (not avatars)
 		for _, player in ipairs(Players:GetPlayers()) do
-			player:LoadCharacter()
+			RoundSystem.GetOrCreateCharacter(player)
 			task.wait(0.2)
 		end
 		task.wait(0.5)
@@ -630,11 +745,10 @@ function RoundSystem.GameLoop()
 		-- INTERMISSION STATE
 		RoundSystem.SetState(Constants.STATES.INTERMISSION)
 
-		-- Respawn players in lobby
+		-- Respawn players in lobby as their regular avatars
 		for _, player in ipairs(Players:GetPlayers()) do
-			player:LoadCharacter()
-			task.wait(0.1)
 			RoundSystem.SpawnPlayerInLobby(player)
+			task.wait(0.1)
 		end
 
 		for i = Constants.INTERMISSION_TIME, 0, -1 do

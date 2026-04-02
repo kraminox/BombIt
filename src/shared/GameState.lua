@@ -29,6 +29,7 @@ export type PlayerData = {
 	isAlive: boolean,
 	activeBombs: number,
 	curseEndTime: number?,
+	zoomLevel: number, -- Camera zoom multiplier (1.0 = default, higher = zoomed out)
 }
 
 function GameState.CreatePlayerData(userId: number): PlayerData
@@ -45,6 +46,7 @@ function GameState.CreatePlayerData(userId: number): PlayerData
 		isAlive = true,
 		activeBombs = 0,
 		curseEndTime = nil,
+		zoomLevel = 1.0,
 	}
 end
 
@@ -58,6 +60,7 @@ function GameState.ResetPlayerForRound(playerData: PlayerData)
 	playerData.isAlive = true
 	playerData.activeBombs = 0
 	playerData.curseEndTime = nil
+	playerData.zoomLevel = 1.0
 end
 
 function GameState.ApplyPowerUp(playerData: PlayerData, powerUpType: string)
@@ -70,21 +73,9 @@ function GameState.ApplyPowerUp(playerData: PlayerData, powerUpType: string)
 		playerData.bombRange = playerData.bombRange + 1
 	elseif powerUpType == "SPEED_UP" then
 		playerData.speed = math.min(playerData.speed + 3, Constants.MOVE_SPEED_MAX)
-	elseif powerUpType == "SHIELD" then
-		playerData.hasShield = true
-	elseif powerUpType == "SKULL" then
-		-- Random curse effect
-		local curseType = math.random(1, 3)
-		if curseType == 1 then
-			-- Slow
-			playerData.speed = math.max(playerData.speed - 6, 6)
-		elseif curseType == 2 then
-			-- Reduced range
-			playerData.bombRange = math.max(playerData.bombRange - 1, 1)
-		else
-			-- Auto-drop bombs (handled in BombService)
-			playerData.curseEndTime = tick() + 5
-		end
+	elseif powerUpType == "ZOOM_OUT" then
+		-- Increase zoom level by 10% (stacks)
+		playerData.zoomLevel = playerData.zoomLevel + 0.1
 	end
 end
 

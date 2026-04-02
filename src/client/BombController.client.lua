@@ -28,7 +28,7 @@ local function CreateSound(name: string, soundId: string): Sound
 	local sound = Instance.new("Sound")
 	sound.Name = name
 	sound.SoundId = soundId
-	sound.Volume = 0.5
+	sound.Volume = 0.25 -- Lighter sound effects
 	sound.Parent = SoundService
 	sounds[name] = sound
 	return sound
