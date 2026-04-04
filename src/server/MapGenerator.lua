@@ -32,10 +32,18 @@ local modelTemplates = {
 	DarkShade = nil :: Instance?,
 }
 
--- City assets (loaded from ReplicatedStorage/Assets/City)
-local cityAssets = {
+-- Theme assets (loaded from ReplicatedStorage/Assets/<Theme>)
+local themeAssets = {
 	soft = {} :: {Model},
 	hard = {} :: {Model},
+}
+
+-- Random 90-degree rotation offsets for variety
+local ROTATIONS_90 = {
+	CFrame.Angles(0, 0, 0),
+	CFrame.Angles(0, math.rad(90), 0),
+	CFrame.Angles(0, math.rad(180), 0),
+	CFrame.Angles(0, math.rad(270), 0),
 }
 
 -- Create a smooth low-poly part
@@ -137,33 +145,32 @@ function MapGenerator.Initialize()
 	if modelTemplates.LightShade then print("[MapGenerator] Found LightShade") end
 	if modelTemplates.DarkShade then print("[MapGenerator] Found DarkShade") end
 
-	-- Load city assets from ReplicatedStorage/Assets/City
+	-- Load theme assets from ReplicatedStorage/Assets/Cinema
 	local AssetsFolder = ReplicatedStorage:FindFirstChild("Assets")
 	if AssetsFolder then
-		local CityFolder = AssetsFolder:FindFirstChild("City")
-		if CityFolder then
-			-- Clear previous city assets
-			cityAssets.soft = {}
-			cityAssets.hard = {}
+		local ThemeFolder = AssetsFolder:FindFirstChild("Cinema")
+		if ThemeFolder then
+			themeAssets.soft = {}
+			themeAssets.hard = {}
 
-			for _, asset in ipairs(CityFolder:GetChildren()) do
+			for _, asset in ipairs(ThemeFolder:GetChildren()) do
 				if asset:IsA("Model") then
 					local assetType = asset:GetAttribute("Type")
 					if assetType == "Soft" then
-						table.insert(cityAssets.soft, asset)
-						print("[MapGenerator] Found city soft asset:", asset.Name)
+						table.insert(themeAssets.soft, asset)
+						print("[MapGenerator] Found theme soft asset:", asset.Name)
 					elseif assetType == "Hard" then
-						table.insert(cityAssets.hard, asset)
-						print("[MapGenerator] Found city hard asset:", asset.Name)
+						table.insert(themeAssets.hard, asset)
+						print("[MapGenerator] Found theme hard asset:", asset.Name)
 					else
-						warn("[MapGenerator] City asset missing Type attribute:", asset.Name)
+						warn("[MapGenerator] Theme asset missing Type attribute:", asset.Name)
 					end
 				end
 			end
 
-			print("[MapGenerator] Loaded", #cityAssets.soft, "soft and", #cityAssets.hard, "hard city assets")
+			print("[MapGenerator] Loaded", #themeAssets.soft, "soft and", #themeAssets.hard, "hard theme assets")
 		else
-			print("[MapGenerator] No City folder found in Assets")
+			print("[MapGenerator] No Cinema folder found in Assets")
 		end
 	else
 		print("[MapGenerator] No Assets folder found in ReplicatedStorage")
@@ -369,152 +376,112 @@ function MapGenerator.CreateCharacterModel(charData: {id: number, name: string, 
 	return model
 end
 
--- Map patterns for rectangle arena with 6 spawns (more hard walls)
+-- Helper: place a hard wall if valid
+local function TryPlaceHard(grid, x, y)
+	if x < 2 or y < 2 or x > Constants.GRID_WIDTH - 1 or y > Constants.GRID_HEIGHT - 1 then return end
+	if not MapData.IsInPlayableArea(x, y) then return end
+	if MapData.IsSpawnCorner(x, y) then return end
+	grid[x][y] = "hard"
+end
+
+-- Map patterns with randomized hard wall placement
 local MAP_PATTERNS = {
-	-- Pattern 1: Classic grid pattern (every other tile)
+	-- Pattern 1: Scattered random clusters
 	function(grid, w, h)
+		-- Random scatter (~20% density)
 		for x = 2, w - 1 do
 			for y = 2, h - 1 do
-				if x % 2 == 0 and y % 2 == 0 then
-					if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-						grid[x][y] = "hard"
-					end
+				if math.random() < 0.20 then
+					TryPlaceHard(grid, x, y)
 				end
 			end
 		end
 	end,
 
-	-- Pattern 2: Dense grid with scattered pillars
+	-- Pattern 2: Random clumps (place seeds then grow them)
+	function(grid, w, h)
+		-- Place 12-18 random seed points
+		local seeds = math.random(12, 18)
+		for _ = 1, seeds do
+			local sx = math.random(3, w - 2)
+			local sy = math.random(3, h - 2)
+			TryPlaceHard(grid, sx, sy)
+
+			-- Grow 1-3 neighbors from each seed
+			local growCount = math.random(1, 3)
+			local dirs = {{1,0},{-1,0},{0,1},{0,-1}}
+			for i = 1, growCount do
+				local d = dirs[math.random(1, #dirs)]
+				TryPlaceHard(grid, sx + d[1], sy + d[2])
+			end
+		end
+	end,
+
+	-- Pattern 3: Random with open center
 	function(grid, w, h)
 		local cx, cy = math.ceil(w/2), math.ceil(h/2)
 
-		-- Every other tile pattern
 		for x = 2, w - 1 do
 			for y = 2, h - 1 do
-				if x % 2 == 0 and y % 2 == 0 then
-					if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-						grid[x][y] = "hard"
-					end
+				local distFromCenter = math.abs(x - cx) + math.abs(y - cy)
+				-- Higher chance further from center, no walls near center
+				if distFromCenter > 4 and math.random() < 0.22 then
+					TryPlaceHard(grid, x, y)
 				end
-			end
-		end
-
-		-- Extra pillars
-		local pillars = {
-			{cx-3, cy-3}, {cx+3, cy-3}, {cx-3, cy+3}, {cx+3, cy+3},
-			{cx, cy-5}, {cx, cy+5}, {cx-5, cy}, {cx+5, cy},
-		}
-		for _, p in ipairs(pillars) do
-			if MapData.IsInPlayableArea(p[1], p[2]) and not MapData.IsSpawnCorner(p[1], p[2]) then
-				grid[p[1]][p[2]] = "hard"
 			end
 		end
 	end,
 
-	-- Pattern 3: Diamond + grid hybrid
+	-- Pattern 4: Random ring zones
 	function(grid, w, h)
 		local cx, cy = math.ceil(w/2), math.ceil(h/2)
 
-		-- Base grid pattern
 		for x = 2, w - 1 do
 			for y = 2, h - 1 do
-				if x % 2 == 0 and y % 2 == 0 then
-					if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-						grid[x][y] = "hard"
-					end
-				end
-			end
-		end
-
-		-- Diamond additions
-		for x = 1, w do
-			for y = 1, h do
-				local dist = math.abs(x - cx) + math.abs(y - cy)
-				if dist == 5 then
-					if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-						grid[x][y] = "hard"
-					end
+				local dist = math.sqrt((x - cx)^2 + (y - cy)^2)
+				-- Walls more likely in ring bands (3-5 and 7-9 from center)
+				local inRing = (dist >= 3 and dist <= 5) or (dist >= 7 and dist <= 9)
+				if inRing and math.random() < 0.30 then
+					TryPlaceHard(grid, x, y)
+				elseif not inRing and math.random() < 0.08 then
+					TryPlaceHard(grid, x, y)
 				end
 			end
 		end
 	end,
 
-	-- Pattern 4: Cross corridors with pillars
+	-- Pattern 5: Random diagonal bias
 	function(grid, w, h)
-		local cx, cy = math.ceil(w/2), math.ceil(h/2)
-
-		-- Grid pattern
 		for x = 2, w - 1 do
 			for y = 2, h - 1 do
-				if x % 2 == 0 and y % 2 == 0 then
-					if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-						-- Skip center cross
-						if x ~= cx and y ~= cy then
-							grid[x][y] = "hard"
-						end
-					end
-				end
-			end
-		end
-
-		-- Ring around center
-		for x = cx-3, cx+3 do
-			for y = cy-3, cy+3 do
-				if (x == cx-3 or x == cx+3 or y == cy-3 or y == cy+3) then
-					if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-						grid[x][y] = "hard"
-					end
+				-- Slightly favor diagonal lines for organic feel
+				local onDiag = math.abs(x - y) < 2 or math.abs(x - (Constants.GRID_HEIGHT - y)) < 2
+				local chance = onDiag and 0.30 or 0.12
+				if math.random() < chance then
+					TryPlaceHard(grid, x, y)
 				end
 			end
 		end
 	end,
 
-	-- Pattern 5: Maze-like walls
+	-- Pattern 6: Sparse random with small L-shapes
 	function(grid, w, h)
-		-- Base grid
-		for x = 2, w - 1 do
-			for y = 2, h - 1 do
-				if x % 2 == 0 and y % 2 == 0 then
-					if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-						grid[x][y] = "hard"
-					end
-				end
-			end
-		end
+		-- Place 10-15 random L-shaped pieces
+		local count = math.random(10, 15)
+		for _ = 1, count do
+			local sx = math.random(3, w - 2)
+			local sy = math.random(3, h - 2)
+			TryPlaceHard(grid, sx, sy)
 
-		-- Add some extra walls for maze feel
-		for x = 3, w - 2, 4 do
-			for y = 3, h - 2, 4 do
-				if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-					grid[x][y] = "hard"
-				end
-			end
-		end
-	end,
-
-	-- Pattern 6: Symmetric blocks
-	function(grid, w, h)
-		local cx, cy = math.ceil(w/2), math.ceil(h/2)
-
-		-- Standard grid
-		for x = 2, w - 1 do
-			for y = 2, h - 1 do
-				if x % 2 == 0 and y % 2 == 0 then
-					if MapData.IsInPlayableArea(x, y) and not MapData.IsSpawnCorner(x, y) then
-						grid[x][y] = "hard"
-					end
-				end
-			end
-		end
-
-		-- Symmetric corner blocks
-		local blocks = {
-			{3, 3}, {w-2, 3}, {3, h-2}, {w-2, h-2},
-			{cx, 3}, {cx, h-2}, {3, cy}, {w-2, cy},
-		}
-		for _, p in ipairs(blocks) do
-			if MapData.IsInPlayableArea(p[1], p[2]) and not MapData.IsSpawnCorner(p[1], p[2]) then
-				grid[p[1]][p[2]] = "hard"
+			-- Random L direction
+			local horizontal = math.random() > 0.5
+			local sign = math.random() > 0.5 and 1 or -1
+			if horizontal then
+				TryPlaceHard(grid, sx + sign, sy)
+				TryPlaceHard(grid, sx, sy + (math.random() > 0.5 and 1 or -1))
+			else
+				TryPlaceHard(grid, sx, sy + sign)
+				TryPlaceHard(grid, sx + (math.random() > 0.5 and 1 or -1), sy)
 			end
 		end
 	end,
@@ -644,26 +611,52 @@ function MapGenerator.GenerateMap()
 				local tileCFrame = MapData.GridToCFrame(x, y)
 				local wallCFrame = tileCFrame * CFrame.new(0, Constants.TILE_SIZE / 2, 0)
 
-				-- Try to use HardCrate model
-				local crate = CreateCrate(wallCFrame, "HardWall_" .. x .. "_" .. y, "hard")
-				if crate then
-					crate.Parent = arenaFolder
-					CollectionService:AddTag(crate, "HardWall")
-				else
-					-- Fallback to basic part with rotation
-					local wall = Instance.new("Part")
-					wall.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
-					wall.CFrame = wallCFrame
-					wall.Color = Constants.COLORS.HARD_WALL
-					wall.Name = "HardWall_" .. x .. "_" .. y
-					wall.Material = Enum.Material.SmoothPlastic
-					wall.Anchored = true
-					wall.CanCollide = true
-					wall.CastShadow = true
-					wall.TopSurface = Enum.SurfaceType.Smooth
-					wall.BottomSurface = Enum.SurfaceType.Smooth
-					wall.Parent = arenaFolder
-					CollectionService:AddTag(wall, "HardWall")
+				-- Apply random 90-degree rotation for variety
+				local randomRot = ROTATIONS_90[math.random(1, #ROTATIONS_90)]
+				local rotatedCFrame = wallCFrame * randomRot
+
+				-- Try theme assets first, then fallback to default crate
+				local placed = false
+				if #themeAssets.hard > 0 then
+					local template = themeAssets.hard[math.random(1, #themeAssets.hard)]
+					local asset = template:Clone()
+					asset.Name = "HardWall_" .. x .. "_" .. y
+
+					local primaryPart = asset.PrimaryPart or asset:FindFirstChildWhichIsA("BasePart")
+					if primaryPart then
+						asset:SetPrimaryPartCFrame(rotatedCFrame)
+					end
+					for _, part in ipairs(asset:GetDescendants()) do
+						if part:IsA("BasePart") then
+							part.Anchored = true
+							part.CanCollide = true
+						end
+					end
+					asset.Parent = arenaFolder
+					CollectionService:AddTag(asset, "HardWall")
+					placed = true
+				end
+
+				if not placed then
+					local crate = CreateCrate(rotatedCFrame, "HardWall_" .. x .. "_" .. y, "hard")
+					if crate then
+						crate.Parent = arenaFolder
+						CollectionService:AddTag(crate, "HardWall")
+					else
+						local wall = Instance.new("Part")
+						wall.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
+						wall.CFrame = rotatedCFrame
+						wall.Color = Constants.COLORS.HARD_WALL
+						wall.Name = "HardWall_" .. x .. "_" .. y
+						wall.Material = Enum.Material.SmoothPlastic
+						wall.Anchored = true
+						wall.CanCollide = true
+						wall.CastShadow = true
+						wall.TopSurface = Enum.SurfaceType.Smooth
+						wall.BottomSurface = Enum.SurfaceType.Smooth
+						wall.Parent = arenaFolder
+						CollectionService:AddTag(wall, "HardWall")
+					end
 				end
 
 				MapData.SetWalkable(x, y, false)
@@ -702,32 +695,58 @@ function MapGenerator.GenerateMap()
 				local tileCFrame = MapData.GridToCFrame(x, y)
 				local wallCFrame = tileCFrame * CFrame.new(0, Constants.TILE_SIZE / 2, 0)
 
-				-- Try to use SoftCrate model
-				local crate = CreateCrate(wallCFrame, "SoftWall_" .. x .. "_" .. y, "soft")
-				if crate then
-					crate.Parent = arenaFolder
-					CollectionService:AddTag(crate, "SoftWall")
-				else
-					-- Fallback to basic part with rotation
-					local colorVariation = math.random(-20, 20)
-					local r = math.clamp(Constants.COLORS.SOFT_WALL.R * 255 + colorVariation, 180, 255)
-					local g = math.clamp(Constants.COLORS.SOFT_WALL.G * 255 + colorVariation/2, 140, 200)
-					local b = math.clamp(Constants.COLORS.SOFT_WALL.B * 255 + colorVariation, 180, 255)
-					local softColor = Color3.fromRGB(r, g, b)
+				-- Apply random 90-degree rotation for variety
+				local randomRot = ROTATIONS_90[math.random(1, #ROTATIONS_90)]
+				local rotatedCFrame = wallCFrame * randomRot
 
-					local wall = Instance.new("Part")
-					wall.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
-					wall.CFrame = wallCFrame
-					wall.Color = softColor
-					wall.Name = "SoftWall_" .. x .. "_" .. y
-					wall.Material = Enum.Material.SmoothPlastic
-					wall.Anchored = true
-					wall.CanCollide = true
-					wall.CastShadow = true
-					wall.TopSurface = Enum.SurfaceType.Smooth
-					wall.BottomSurface = Enum.SurfaceType.Smooth
-					wall.Parent = arenaFolder
-					CollectionService:AddTag(wall, "SoftWall")
+				-- Try theme assets first, then fallback to default crate
+				local placed = false
+				if #themeAssets.soft > 0 then
+					local template = themeAssets.soft[math.random(1, #themeAssets.soft)]
+					local asset = template:Clone()
+					asset.Name = "SoftWall_" .. x .. "_" .. y
+
+					local primaryPart = asset.PrimaryPart or asset:FindFirstChildWhichIsA("BasePart")
+					if primaryPart then
+						asset:SetPrimaryPartCFrame(rotatedCFrame)
+					end
+					for _, part in ipairs(asset:GetDescendants()) do
+						if part:IsA("BasePart") then
+							part.Anchored = true
+							part.CanCollide = true
+						end
+					end
+					asset.Parent = arenaFolder
+					CollectionService:AddTag(asset, "SoftWall")
+					placed = true
+				end
+
+				if not placed then
+					local crate = CreateCrate(rotatedCFrame, "SoftWall_" .. x .. "_" .. y, "soft")
+					if crate then
+						crate.Parent = arenaFolder
+						CollectionService:AddTag(crate, "SoftWall")
+					else
+						local colorVariation = math.random(-20, 20)
+						local r = math.clamp(Constants.COLORS.SOFT_WALL.R * 255 + colorVariation, 180, 255)
+						local g = math.clamp(Constants.COLORS.SOFT_WALL.G * 255 + colorVariation/2, 140, 200)
+						local b = math.clamp(Constants.COLORS.SOFT_WALL.B * 255 + colorVariation, 180, 255)
+						local softColor = Color3.fromRGB(r, g, b)
+
+						local wall = Instance.new("Part")
+						wall.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
+						wall.CFrame = rotatedCFrame
+						wall.Color = softColor
+						wall.Name = "SoftWall_" .. x .. "_" .. y
+						wall.Material = Enum.Material.SmoothPlastic
+						wall.Anchored = true
+						wall.CanCollide = true
+						wall.CastShadow = true
+						wall.TopSurface = Enum.SurfaceType.Smooth
+						wall.BottomSurface = Enum.SurfaceType.Smooth
+						wall.Parent = arenaFolder
+						CollectionService:AddTag(wall, "SoftWall")
+					end
 				end
 
 				MapData.SetWalkable(x, y, false)

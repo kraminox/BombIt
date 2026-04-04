@@ -24,6 +24,7 @@ local RoundSystem = {}
 local BombService
 local MapGenerator
 local PowerUpService
+local AnimationService
 
 -- State tracking
 local roundCoroutine: thread? = nil
@@ -43,6 +44,7 @@ function RoundSystem.Initialize()
 	BombService = require(ServerFolder:WaitForChild("BombService"))
 	MapGenerator = require(ServerFolder:WaitForChild("MapGenerator"))
 	PowerUpService = require(ServerFolder:WaitForChild("PowerUpService"))
+	AnimationService = require(ServerFolder:WaitForChild("AnimationService"))
 
 	-- Build lobby, characters, and winners podium
 	MapGenerator.BuildLobby()
@@ -291,18 +293,32 @@ function RoundSystem.GetOrCreateCharacter(player: Player): Model?
 	character.Name = player.Name
 	print("[RoundSystem] Cloned character for", player.Name, "HasAnimSaves:", character:FindFirstChild("AnimSaves") ~= nil)
 
-	-- Set up Humanoid
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if humanoid then
-		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None -- Hide name overhead
+	-- Use character at its native size (scaled in Studio)
 
-		-- Responsive movement settings
-		humanoid.WalkSpeed = 16
-		humanoid.JumpPower = 0 -- No jumping in game
-		humanoid.JumpHeight = 0
-		humanoid.HipHeight = 0 -- Let character sit on ground properly
-		humanoid.MaxSlopeAngle = 45 -- Prevent climbing walls
+
+	-- Remove AnimationController — it conflicts with Humanoid for joint ownership.
+	-- Humanoid's Animator will drive all animations instead.
+	local animController = character:FindFirstChildOfClass("AnimationController")
+	if animController then
+		animController:Destroy()
+		print("[RoundSystem] Removed AnimationController (Humanoid will drive animations)")
 	end
+
+	-- Set up Humanoid (create one if missing)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		humanoid = Instance.new("Humanoid")
+		humanoid.Parent = character
+		print("[RoundSystem] Created Humanoid for custom character")
+	end
+
+	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	humanoid.WalkSpeed = 16
+	humanoid.JumpPower = 0
+	humanoid.JumpHeight = 0
+	humanoid.HipHeight = 1.5
+	humanoid.MaxSlopeAngle = 45
+	humanoid.RequiresNeck = false -- Don't kill character if Neck joint isn't standard
 
 	-- Ensure HumanoidRootPart exists and is set as PrimaryPart
 	local hrp = character:FindFirstChild("HumanoidRootPart")
@@ -334,15 +350,16 @@ function RoundSystem.GetOrCreateCharacter(player: Player): Model?
 		end
 	end
 
-	-- Create held bomb model (server-side so all players see it)
+	-- Create held bomb model welded in front of body at chest level
 	local heldBomb = RoundSystem.CreateHeldBomb()
 	if heldBomb then
-		local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
-		if torso then
+		local hrp = character:FindFirstChild("HumanoidRootPart")
+		if hrp then
 			local weld = Instance.new("Weld")
-			weld.Part0 = torso
+			weld.Name = "BombWeld"
+			weld.Part0 = hrp
 			weld.Part1 = heldBomb.PrimaryPart
-			weld.C0 = CFrame.new(-1, 0.5, 0)
+			weld.C0 = CFrame.new(0, 0.3, -1)
 			weld.Parent = heldBomb.PrimaryPart
 			heldBomb.Parent = character
 		end
@@ -351,6 +368,24 @@ function RoundSystem.GetOrCreateCharacter(player: Player): Model?
 	-- Parent to Workspace and assign to player
 	character.Parent = Workspace
 	player.Character = character
+
+	-- Destroy the default "Animate" LocalScript that Roblox auto-inserts.
+	-- It plays default R6/R15 animations that override our custom ones.
+	task.defer(function()
+		local animate = character:FindFirstChild("Animate")
+		if animate then
+			animate:Destroy()
+			print("[RoundSystem] Destroyed auto-inserted Animate script")
+		end
+		-- Also remove any Animator the Humanoid auto-created, we'll create our own on client
+		local humAnimator = humanoid:FindFirstChildOfClass("Animator")
+		if humAnimator then
+			-- Stop all default tracks first
+			for _, track in ipairs(humAnimator:GetPlayingAnimationTracks()) do
+				track:Stop(0)
+			end
+		end
+	end)
 
 	-- Create stats folder for client UI to read
 	local statsFolder = Instance.new("Folder")
@@ -372,7 +407,14 @@ function RoundSystem.GetOrCreateCharacter(player: Player): Model?
 	speedVal.Value = Constants.MOVE_SPEED
 	speedVal.Parent = statsFolder
 
-	-- Animations are handled client-side by CharacterAnimator.client.lua
+	-- Set up server-side animations (replicate to all clients)
+	if AnimationService then
+		task.defer(function()
+			AnimationService.SetupCharacter(character)
+			-- Initial hold bomb state
+			AnimationService.UpdateHoldBomb(character, true)
+		end)
+	end
 
 	return character
 end
@@ -478,16 +520,40 @@ function RoundSystem.DamagePlayer(player: Player)
 	if eliminated then
 		PlayerDied:FireAllClients(player.UserId)
 
-		-- Kill the character
+		-- Freeze character for death animation (don't kill humanoid)
 		local character = player.Character
 		if character then
-			local humanoid = character:FindFirstChild("Humanoid")
+			local humanoid = character:FindFirstChild("Humanoid") :: Humanoid?
+			local hrp = character:FindFirstChild("HumanoidRootPart") :: BasePart?
 			if humanoid then
-				humanoid.Health = 0
+				humanoid.WalkSpeed = 0
 			end
+			if hrp then
+				hrp.Anchored = true
+			end
+
+			-- After death VFX plays, fade to black and remove character
+			task.delay(1.5, function()
+				-- Tell the dead player to fade to black
+				RoundStateChanged:FireClient(player, "FadeToLobby")
+
+				task.delay(0.5, function()
+					if character and character.Parent then
+						if AnimationService then
+							AnimationService.CleanupCharacter(character)
+						end
+						character:Destroy()
+						player.Character = nil
+					end
+					RoundSystem.SpawnPlayerInLobby(player)
+				end)
+			end)
 		end
 
-		RoundSystem.CheckRoundEnd()
+		-- Delay round end check so death animation plays out
+		task.delay(2, function()
+			RoundSystem.CheckRoundEnd()
+		end)
 	end
 end
 
@@ -706,51 +772,45 @@ function RoundSystem.GameLoop()
 			RoundSystem.EndRound()
 		end
 
-		-- ROUND END STATE - Winners Podium
+		-- ROUND END STATE - Announce winner on map
 		RoundSystem.SetState(Constants.STATES.ROUND_END)
 
 		-- Calculate results
 		roundResults = RoundSystem.CalculateResults()
 
-		-- Broadcast results to clients
+		-- Announce winner to all clients (stays on map)
 		RoundStateChanged:FireAllClients("RoundResults", {
 			results = roundResults,
 			winner = currentWinner and currentWinner.Name or "Nobody",
 		})
 
+		-- Show winner announcement for a few seconds on the map
+		task.wait(3)
+
 		-- Clean up arena
 		BombService.ClearAllBombs()
 		PowerUpService.ClearAllPowerUps()
 
-		-- Spawn game characters for podium (not avatars)
-		for _, player in ipairs(Players:GetPlayers()) do
-			RoundSystem.GetOrCreateCharacter(player)
-			task.wait(0.2)
-		end
+		-- Black fade transition, then return all players to lobby
+		RoundStateChanged:FireAllClients("FadeToLobby")
 		task.wait(0.5)
 
-		-- Teleport top 3 to podium
-		RoundSystem.TeleportToPodium(roundResults)
-
-		-- Winners stage duration (show emotes/stickers)
-		for i = 8, 0, -1 do
-			roundTimer = i
-			RoundStateChanged:FireAllClients("Timer", {timer = i, stage = "winners"})
-			task.wait(1)
+		-- Clear the map
+		local arenaFolder = Workspace:FindFirstChild("Arena")
+		if arenaFolder then
+			arenaFolder:ClearAllChildren()
 		end
-
-		-- Disable confetti
-		MapGenerator.SetConfettiEnabled(false)
+		MapData.InitializeGrids()
 
 		-- INTERMISSION STATE
 		RoundSystem.SetState(Constants.STATES.INTERMISSION)
 
-		-- Respawn players in lobby as their regular avatars
-		for _, player in ipairs(Players:GetPlayers()) do
-			RoundSystem.SpawnPlayerInLobby(player)
+		for _, p in ipairs(Players:GetPlayers()) do
+			RoundSystem.SpawnPlayerInLobby(p)
 			task.wait(0.1)
 		end
 
+		-- Brief intermission
 		for i = Constants.INTERMISSION_TIME, 0, -1 do
 			roundTimer = i
 			RoundStateChanged:FireAllClients("Timer", {timer = i})

@@ -272,8 +272,8 @@ local function OnUpdate(deltaTime: number)
 		humanoid.AutoRotate = false
 
 		if moveDirection.Magnitude > 0 then
-			-- Calculate target rotation (negate X and subtract 90 degrees for model orientation)
-			local targetAngle = math.atan2(-moveDirection.X, -moveDirection.Z) - math.rad(90)
+			-- Calculate target rotation from movement direction
+			local targetAngle = math.atan2(-moveDirection.X, -moveDirection.Z)
 			local currentCFrame = hrp.CFrame
 			local targetCFrame = CFrame.new(currentCFrame.Position) * CFrame.Angles(0, targetAngle, 0)
 
@@ -414,7 +414,7 @@ end)
 -- Connect events
 UserInputService.InputBegan:Connect(OnInputBegan)
 UserInputService.InputEnded:Connect(OnInputEnded)
-RunService.Heartbeat:Connect(OnUpdate)
+RunService:BindToRenderStep("PlayerMovement", Enum.RenderPriority.Input.Value, OnUpdate)
 
 -- Danger tiles visibility management
 -- Hide danger tiles for players not in the game (dead/spectating)

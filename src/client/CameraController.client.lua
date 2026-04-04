@@ -220,7 +220,10 @@ local function UpdateCamera(deltaTime: number?)
 				if canvas and canvas:IsA("BasePart") then
 					-- Canvas.LookVector is the direction the canvas faces (-Z in canvas local)
 					-- Position camera: above player, offset in canvas's +Z direction (behind)
-					local behindDir = -canvas.CFrame.LookVector
+					-- Flatten to horizontal so canvas tilt doesn't push camera vertically
+					local rawBehind = -canvas.CFrame.LookVector
+					local behindDir = Vector3.new(rawBehind.X, 0, rawBehind.Z)
+					if behindDir.Magnitude > 0 then behindDir = behindDir.Unit end
 					local cameraPos = targetPos + Vector3.new(0, zoomedHeight, 0) + behindDir * zoomedDistance
 
 					-- Use canvas's LookVector as up so grid edges align with screen edges
@@ -251,7 +254,10 @@ local function UpdateCamera(deltaTime: number?)
 		-- Use Canvas CFrame directly to align camera with the grid
 		local canvas = Workspace:FindFirstChild("Canvas")
 		if canvas and canvas:IsA("BasePart") then
-			local behindDir = -canvas.CFrame.LookVector
+			-- Flatten to horizontal so canvas tilt doesn't push camera vertically
+			local rawBehind = -canvas.CFrame.LookVector
+			local behindDir = Vector3.new(rawBehind.X, 0, rawBehind.Z)
+			if behindDir.Magnitude > 0 then behindDir = behindDir.Unit end
 			local cameraPos = targetPos + Vector3.new(0, zoomedHeight, 0) + behindDir * zoomedDistance
 			camera.CFrame = CFrame.lookAt(cameraPos, targetPos, canvas.CFrame.LookVector)
 		else

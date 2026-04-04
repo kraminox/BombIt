@@ -45,6 +45,7 @@ local RoundSystem
 local BombService
 local MapGenerator
 local PowerUpService
+local AnimationService
 
 -- Player data storage
 local playerSaveData = {} :: {[number]: {wins: number, totalCoins: number, equippedCosmetics: {}, ownedCosmetics: {}}}
@@ -187,11 +188,13 @@ local function Initialize()
 	BombService = require(ServerFolder:WaitForChild("BombService"))
 	MapGenerator = require(ServerFolder:WaitForChild("MapGenerator"))
 	PowerUpService = require(ServerFolder:WaitForChild("PowerUpService"))
+	AnimationService = require(ServerFolder:WaitForChild("AnimationService"))
 
 	-- Initialize services
 	MapGenerator.Initialize()
 	BombService.Initialize()
 	PowerUpService.Initialize()
+	AnimationService.Initialize()
 	RoundSystem.Initialize()
 
 	-- Connect player events
