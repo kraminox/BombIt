@@ -23,7 +23,7 @@ Constants.CAMERA_SMOOTHING = 0.15 -- Lerp factor per frame
 
 -- Bombs
 Constants.BOMB_FUSE_TIME = 2.5 -- Seconds before explosion
-Constants.BOMB_DEFAULT_RANGE = 2 -- Tiles in each direction
+Constants.BOMB_DEFAULT_RANGE = 1 -- Tiles in each direction
 Constants.MAX_BOMBS_DEFAULT = 1 -- Simultaneous bombs per player
 Constants.BOMB_SIZE = 1.8 -- Diameter in studs
 
@@ -78,7 +78,7 @@ Constants.POWERUP_TYPES = {
 	FIRE_UP = {
 		id = "FIRE_UP",
 		name = "+1 Range",
-		mesh = "Arrow", -- ReplicatedStorage/Assets/Powerups/Arrow
+		mesh = "Fire", -- ReplicatedStorage/Assets/Powerups/Fire
 		icon = "🔥",
 		color = Color3.fromRGB(255, 165, 0), -- Orange
 	},
@@ -89,58 +89,24 @@ Constants.POWERUP_TYPES = {
 		icon = "⚡",
 		color = Color3.fromRGB(255, 255, 0), -- Yellow
 	},
-	ZOOM_OUT = {
-		id = "ZOOM_OUT",
-		name = "Zoom Out",
-		mesh = "Shades", -- ReplicatedStorage/Assets/Powerups/Shades
-		icon = "🕶️",
-		color = Color3.fromRGB(150, 200, 255), -- Light blue
-	},
 }
 
 -- Character Data
 Constants.CHARACTERS = {
 	{
 		id = 1,
-		name = "Sparky",
-		bodyColor = Color3.fromRGB(255, 255, 0), -- Bright Yellow
-		accentColor = Color3.fromRGB(255, 165, 0), -- Orange
-		accessory = "lightning",
+		name = "Pink",
+		cosmeticsFolder = "PinkAssets",
 	},
 	{
 		id = 2,
-		name = "Bubbles",
-		bodyColor = Color3.fromRGB(135, 206, 235), -- Sky Blue
-		accentColor = Color3.fromRGB(255, 255, 255), -- White
-		accessory = "bow",
+		name = "Blue",
+		cosmeticsFolder = "BlueAssets",
 	},
 	{
 		id = 3,
-		name = "Ember",
-		bodyColor = Color3.fromRGB(255, 50, 50), -- Bright Red
-		accentColor = Color3.fromRGB(139, 0, 0), -- Dark Red
-		accessory = "flame",
-	},
-	{
-		id = 4,
-		name = "Clover",
-		bodyColor = Color3.fromRGB(50, 205, 50), -- Lime Green
-		accentColor = Color3.fromRGB(0, 100, 0), -- Dark Green
-		accessory = "leaf",
-	},
-	{
-		id = 5,
-		name = "Midnight",
-		bodyColor = Color3.fromRGB(75, 0, 130), -- Dark Purple
-		accentColor = Color3.fromRGB(0, 255, 255), -- Cyan
-		accessory = "star",
-	},
-	{
-		id = 6,
-		name = "Snowball",
-		bodyColor = Color3.fromRGB(255, 255, 255), -- White
-		accentColor = Color3.fromRGB(173, 216, 230), -- Light Blue
-		accessory = "snowflake",
+		name = "Orange",
+		cosmeticsFolder = "OrangeAssets",
 	},
 }
 

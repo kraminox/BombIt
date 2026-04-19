@@ -19,6 +19,7 @@ GameState.players = {} -- {[userId] = playerData}
 export type PlayerData = {
 	userId: number,
 	characterId: number,
+	equippedCosmetics: {string}, -- list of accessory names from Outfit1
 	lives: number,
 	bombCount: number,
 	bombRange: number,
@@ -29,13 +30,13 @@ export type PlayerData = {
 	isAlive: boolean,
 	activeBombs: number,
 	curseEndTime: number?,
-	zoomLevel: number, -- Camera zoom multiplier (1.0 = default, higher = zoomed out)
 }
 
 function GameState.CreatePlayerData(userId: number): PlayerData
 	return {
 		userId = userId,
 		characterId = 1,
+		equippedCosmetics = {},
 		lives = Constants.PLAYER_LIVES_DEFAULT,
 		bombCount = Constants.MAX_BOMBS_DEFAULT,
 		bombRange = Constants.BOMB_DEFAULT_RANGE,
@@ -46,7 +47,6 @@ function GameState.CreatePlayerData(userId: number): PlayerData
 		isAlive = true,
 		activeBombs = 0,
 		curseEndTime = nil,
-		zoomLevel = 1.0,
 	}
 end
 
@@ -60,7 +60,6 @@ function GameState.ResetPlayerForRound(playerData: PlayerData)
 	playerData.isAlive = true
 	playerData.activeBombs = 0
 	playerData.curseEndTime = nil
-	playerData.zoomLevel = 1.0
 end
 
 function GameState.ApplyPowerUp(playerData: PlayerData, powerUpType: string)
@@ -73,9 +72,6 @@ function GameState.ApplyPowerUp(playerData: PlayerData, powerUpType: string)
 		playerData.bombRange = playerData.bombRange + 1
 	elseif powerUpType == "SPEED_UP" then
 		playerData.speed = math.min(playerData.speed + 3, Constants.MOVE_SPEED_MAX)
-	elseif powerUpType == "ZOOM_OUT" then
-		-- Increase zoom level by 10% (stacks)
-		playerData.zoomLevel = playerData.zoomLevel + 0.1
 	end
 end
 

@@ -112,8 +112,8 @@ local function OnPlayerRemoving(player: Player)
 	end
 end
 
--- Handle character selection
-CharacterSelected.OnServerEvent:Connect(function(player: Player, characterId: number)
+-- Handle character selection + cosmetics save
+CharacterSelected.OnServerEvent:Connect(function(player: Player, characterId: number, equippedCosmetics: {string}?)
 	local playerData = GameState.players[player.UserId]
 	if not playerData then return end
 
@@ -123,6 +123,17 @@ CharacterSelected.OnServerEvent:Connect(function(player: Player, characterId: nu
 	end
 
 	playerData.characterId = characterId
+
+	-- Store equipped cosmetics if provided (from SaveChanges)
+	if equippedCosmetics and typeof(equippedCosmetics) == "table" then
+		local validated: {string} = {}
+		for _, name in ipairs(equippedCosmetics) do
+			if typeof(name) == "string" then
+				table.insert(validated, name)
+			end
+		end
+		playerData.equippedCosmetics = validated
+	end
 
 	-- Notify other clients
 	RoundStateChanged:FireAllClients("CharacterSelected", {

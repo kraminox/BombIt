@@ -38,6 +38,7 @@ local ShowSticker
 
 -- Character models for spawning
 local CharactersFolder = ReplicatedStorage:WaitForChild("Characters")
+local CosmeticsFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Cosmetics")
 
 function RoundSystem.Initialize()
 	local ServerFolder = script.Parent
@@ -46,9 +47,8 @@ function RoundSystem.Initialize()
 	PowerUpService = require(ServerFolder:WaitForChild("PowerUpService"))
 	AnimationService = require(ServerFolder:WaitForChild("AnimationService"))
 
-	-- Build lobby, characters, and winners podium
+	-- Build lobby and winners podium
 	MapGenerator.BuildLobby()
-	MapGenerator.BuildCharacters()
 	MapGenerator.BuildWinnersPodium()
 
 	-- Create emote/sticker remotes
@@ -266,27 +266,26 @@ function RoundSystem.SpawnPlayersInArena()
 end
 
 function RoundSystem.GetOrCreateCharacter(player: Player): Model?
-	-- Look for a character template with AnimSaves folder (custom animated character)
+	-- Find the base rig template (single rig with AnimSaves)
 	local template = nil
-	print("[RoundSystem] Looking for custom character in CharactersFolder...")
 	for _, child in ipairs(CharactersFolder:GetChildren()) do
-		print("[RoundSystem] Found:", child.Name, "HasAnimSaves:", child:FindFirstChild("AnimSaves") ~= nil)
 		if child:IsA("Model") and child:FindFirstChild("AnimSaves") then
 			template = child
-			print("[RoundSystem] Selected template:", child.Name)
 			break
 		end
 	end
 
 	if not template then
 		-- No custom character found, use default Roblox character
-		print("[RoundSystem] No custom character with AnimSaves found, using default")
+		print("[RoundSystem] No custom character found, using default")
 		if not player.Character then
 			player:LoadCharacter()
 			task.wait(0.5)
 		end
 		return player.Character
 	end
+
+	print("[RoundSystem] Using base rig:", template.Name, "for", player.Name)
 
 	-- Clone the custom character
 	local character = template:Clone()
@@ -362,6 +361,54 @@ function RoundSystem.GetOrCreateCharacter(player: Player): Model?
 			weld.C0 = CFrame.new(0, 0.3, -1)
 			weld.Parent = heldBomb.PrimaryPart
 			heldBomb.Parent = character
+		end
+	end
+
+	-- Apply saved cosmetics BEFORE parenting to Workspace
+	-- (adding accessories after player.Character is set causes Humanoid to re-process and eject parts)
+	local playerData = GameState.players[player.UserId]
+	if playerData then
+		local charData = Constants.CHARACTERS[playerData.characterId]
+		if charData then
+			local charCosmeticsFolder = CosmeticsFolder:FindFirstChild(charData.cosmeticsFolder)
+			local outfitFolder = charCosmeticsFolder and charCosmeticsFolder:FindFirstChild("Outfit1")
+			if outfitFolder then
+				local equippedSet: {[string]: boolean} = {}
+				for _, name in ipairs(playerData.equippedCosmetics) do
+					equippedSet[name] = true
+				end
+
+				local hideShoes = false
+
+				for _, accessory in ipairs(outfitFolder:GetChildren()) do
+					if not accessory:IsA("Accessory") then continue end
+
+					local accName = accessory.Name
+					local baseName = accName
+					if accName:sub(1, 4) == "Left" then
+						baseName = accName:sub(5)
+					elseif accName:sub(1, 5) == "Right" then
+						baseName = accName:sub(6)
+					end
+
+					local shouldEquip = #playerData.equippedCosmetics == 0 or equippedSet[baseName] or equippedSet[accName]
+					if shouldEquip then
+						local clone = accessory:Clone()
+						clone.Parent = character
+
+						if string.find(accName, "Shoe") then
+							hideShoes = true
+						end
+					end
+				end
+
+				if hideShoes then
+					local leftFoot = character:FindFirstChild("LeftFoot") :: BasePart?
+					local rightFoot = character:FindFirstChild("RightFoot") :: BasePart?
+					if leftFoot then leftFoot.Transparency = 1 end
+					if rightFoot then rightFoot.Transparency = 1 end
+				end
+			end
 		end
 	end
 
