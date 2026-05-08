@@ -13,6 +13,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Constants = require(Shared:WaitForChild("Constants"))
 local GameState = require(Shared:WaitForChild("GameState"))
 local MapData = require(Shared:WaitForChild("MapData"))
+local BombSkins = require(Shared:WaitForChild("BombSkins"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local PlaceBomb = Remotes:WaitForChild("PlaceBomb")
@@ -24,13 +25,19 @@ local BombService = {}
 local RoundSystem
 local PowerUpService
 local MapGenerator
+local InventoryService
 
--- VFX template
-local VFXFolder = ReplicatedStorage:FindFirstChild("VFX")
+-- VFX folder (explosion templates stored here)
+local AssetsFolder = ReplicatedStorage:FindFirstChild("Assets")
+local VFXFolder = AssetsFolder and AssetsFolder:FindFirstChild("VFX") or ReplicatedStorage:FindFirstChild("VFX")
+
+-- Fallback: old ParticleTemplate for safety
 local ParticleTemplate = VFXFolder and VFXFolder:FindFirstChild("ParticleTemplate")
+-- Default explosion model
+local DefaultExplosion = VFXFolder and VFXFolder:FindFirstChild("Default Red Explosion")
 
-if not ParticleTemplate then
-	warn("[BombService] ParticleTemplate not found at ReplicatedStorage.VFX.ParticleTemplate!")
+if not VFXFolder then
+	warn("[BombService] VFX folder not found in ReplicatedStorage!")
 end
 
 -- Warning indicator template
@@ -46,34 +53,98 @@ end
 local SoundsFolder = ReplicatedStorage:FindFirstChild("Sounds")
 local SoundVFXFolder = SoundsFolder and SoundsFolder:FindFirstChild("VFX")
 local ExplosionSound = SoundVFXFolder and SoundVFXFolder:FindFirstChild("Explosion")
-local DropSound = SoundVFXFolder and SoundVFXFolder:FindFirstChild("Drop")
 
 -- Colors
 local DANGER_COLOR = Color3.fromRGB(255, 140, 50) -- Orange danger floor
 local NORMAL_FLOOR_COLOR = Color3.fromRGB(76, 175, 80) -- Normal green floor (from Canvas)
+
+-- Per-player bomb placement cooldown (prevents spam)
+local lastBombTime = {} :: {[number]: number}
 
 -- Active bombs tracking
 local activeBombs = {} :: {[string]: {model: Model, gridX: number, gridY: number, ownerId: number, range: number, dangerTiles: {Part}}}
 local bombPool = {} :: {Model}
 local dangerTilePool = {} :: {Part}
 
--- Create bomb model template
+-- Bomb model template (loaded from Assets/Bombs/Default Bomb)
+local BombTemplate: Model? = nil
+
+-- Load bomb template from Assets
+local function LoadBombTemplate()
+	local Assets = ReplicatedStorage:WaitForChild("Assets")
+	local Bombs = Assets:WaitForChild("Bombs")
+	local defaultBomb = Bombs:WaitForChild("Default Bomb", 10)
+
+	if defaultBomb and defaultBomb:IsA("Model") then
+		BombTemplate = defaultBomb
+		print("[BombService] Loaded bomb template: Default Bomb")
+	else
+		warn("[BombService] Default Bomb model not found in Assets/Bombs!")
+	end
+end
+
+-- Get the bomb model template for a specific player's equipped skin.
+-- Always returns the correct template Model (not a clone) for the player's equipped skin.
+local function GetBombTemplateForPlayer(player: Player): Model?
+	if not InventoryService then return BombTemplate end
+	local skinId = InventoryService.GetEquippedBombSkinId(player)
+	if not skinId or skinId == "" or skinId == "default_bomb" then return BombTemplate end
+
+	local skinData = BombSkins.GetSkinById(skinId)
+	if not skinData then return BombTemplate end
+
+	local skinModel = BombSkins.GetSkinModel(skinData)
+	if skinModel then return skinModel end
+
+	return BombTemplate
+end
+
+-- Create bomb model by cloning the template
 local function CreateBombModel(): Model
+	if BombTemplate then
+		local bomb = BombTemplate:Clone()
+		bomb.Name = "Bomb"
+
+		-- Ensure all parts are anchored and non-collidable for placed bombs
+		for _, part in ipairs(bomb:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = true
+				part.CanCollide = false
+			end
+		end
+
+		-- Add FuseLight to each Fuse part if not already present
+		for _, child in ipairs(bomb:GetChildren()) do
+			if child.Name == "Fuse" and child:IsA("BasePart") then
+				if not child:FindFirstChild("FuseLight") then
+					local light = Instance.new("PointLight")
+					light.Name = "FuseLight"
+					light.Color = Color3.fromRGB(255, 165, 0)
+					light.Brightness = 2
+					light.Range = 4
+					light.Parent = child
+				end
+			end
+		end
+
+		CollectionService:AddTag(bomb, "Bomb")
+		return bomb
+	end
+
+	-- Fallback: create a basic bomb programmatically
 	local bomb = Instance.new("Model")
 	bomb.Name = "Bomb"
 
-	-- Main sphere
-	local sphere = Instance.new("Part")
-	sphere.Name = "Sphere"
-	sphere.Shape = Enum.PartType.Ball
-	sphere.Size = Vector3.new(Constants.BOMB_SIZE, Constants.BOMB_SIZE, Constants.BOMB_SIZE)
-	sphere.Color = Constants.COLORS.BOMB
-	sphere.Material = Enum.Material.SmoothPlastic
-	sphere.Anchored = true
-	sphere.CanCollide = false
-	sphere.Parent = bomb
+	local bombPart = Instance.new("Part")
+	bombPart.Name = "Bomb"
+	bombPart.Shape = Enum.PartType.Ball
+	bombPart.Size = Vector3.new(Constants.BOMB_SIZE, Constants.BOMB_SIZE, Constants.BOMB_SIZE)
+	bombPart.Color = Constants.COLORS.BOMB
+	bombPart.Material = Enum.Material.SmoothPlastic
+	bombPart.Anchored = true
+	bombPart.CanCollide = false
+	bombPart.Parent = bomb
 
-	-- Fuse
 	local fuse = Instance.new("Part")
 	fuse.Name = "Fuse"
 	fuse.Shape = Enum.PartType.Cylinder
@@ -82,10 +153,9 @@ local function CreateBombModel(): Model
 	fuse.Material = Enum.Material.SmoothPlastic
 	fuse.Anchored = true
 	fuse.CanCollide = false
-	fuse.CFrame = sphere.CFrame * CFrame.new(0, Constants.BOMB_SIZE / 2 + 0.15, 0) * CFrame.Angles(0, 0, math.rad(90))
+	fuse.CFrame = bombPart.CFrame * CFrame.new(0, Constants.BOMB_SIZE / 2 + 0.15, 0) * CFrame.Angles(0, 0, math.rad(90))
 	fuse.Parent = bomb
 
-	-- Point light for fuse glow
 	local light = Instance.new("PointLight")
 	light.Name = "FuseLight"
 	light.Color = Color3.fromRGB(255, 165, 0)
@@ -93,7 +163,7 @@ local function CreateBombModel(): Model
 	light.Range = 4
 	light.Parent = fuse
 
-	bomb.PrimaryPart = sphere
+	bomb.PrimaryPart = bombPart
 	CollectionService:AddTag(bomb, "Bomb")
 
 	return bomb
@@ -164,6 +234,10 @@ function BombService.Initialize()
 	RoundSystem = require(ServerFolder:WaitForChild("RoundSystem"))
 	PowerUpService = require(ServerFolder:WaitForChild("PowerUpService"))
 	MapGenerator = require(ServerFolder:WaitForChild("MapGenerator"))
+	InventoryService = require(ServerFolder:WaitForChild("InventoryService"))
+
+	-- Load bomb template from Assets
+	LoadBombTemplate()
 
 	-- Create bomb pool
 	for _ = 1, Constants.MAX_BOMB_POOL do
@@ -184,10 +258,44 @@ function BombService.Initialize()
 		BombService.TryPlaceBomb(player)
 	end)
 
+	-- Clean up per-player cooldown data when player leaves
+	Players.PlayerRemoving:Connect(function(player: Player)
+		lastBombTime[player.UserId] = nil
+	end)
+
 	print("[BombService] Initialized with " .. #bombPool .. " bombs and " .. #dangerTilePool .. " danger tiles")
 end
 
--- Get a bomb from pool or create new
+-- Create a bomb model from a specific template (for player skins)
+local function CreateBombFromTemplate(template: Model): Model
+	local bomb = template:Clone()
+	bomb.Name = "Bomb"
+
+	for _, part in ipairs(bomb:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.Anchored = true
+			part.CanCollide = false
+		end
+	end
+
+	for _, child in ipairs(bomb:GetChildren()) do
+		if child.Name == "Fuse" and child:IsA("BasePart") then
+			if not child:FindFirstChild("FuseLight") then
+				local light = Instance.new("PointLight")
+				light.Name = "FuseLight"
+				light.Color = Color3.fromRGB(255, 165, 0)
+				light.Brightness = 2
+				light.Range = 4
+				light.Parent = child
+			end
+		end
+	end
+
+	CollectionService:AddTag(bomb, "Bomb")
+	return bomb
+end
+
+-- Get a default bomb from pool or create new (pool only contains default bombs)
 local function GetBombFromPool(): Model
 	if #bombPool > 0 then
 		return table.remove(bombPool) :: Model
@@ -195,10 +303,21 @@ local function GetBombFromPool(): Model
 	return CreateBombModel()
 end
 
--- Return bomb to pool
+-- Return bomb to pool. Skinned bombs are destroyed and replaced with a fresh
+-- default so the pool never becomes polluted with non-default models.
 local function ReturnBombToPool(bomb: Model)
-	bomb.Parent = ReplicatedStorage
-	table.insert(bombPool, bomb)
+	-- Check if this bomb was a custom skin (tagged during placement)
+	if CollectionService:HasTag(bomb, "SkinnedBomb") then
+		-- Destroy the skinned bomb; don't put it back in the pool
+		bomb:Destroy()
+		-- Replenish the pool with a fresh default bomb so pool size stays stable
+		local fresh = CreateBombModel()
+		fresh.Parent = ReplicatedStorage
+		table.insert(bombPool, fresh)
+	else
+		bomb.Parent = ReplicatedStorage
+		table.insert(bombPool, bomb)
+	end
 end
 
 -- Get danger tile from pool
@@ -230,6 +349,9 @@ local function GetBombKey(gridX: number, gridY: number): string
 end
 
 function BombService.TryPlaceBomb(player: Player)
+	-- Per-player cooldown to prevent bomb spam
+	if lastBombTime[player.UserId] and (tick() - lastBombTime[player.UserId]) < 0.3 then return end
+
 	-- Check game state
 	if GameState.currentState ~= Constants.STATES.PLAYING then return end
 
@@ -264,43 +386,79 @@ function BombService.PlaceBomb(player: Player, gridX: number, gridY: number, ran
 	local playerData = GameState.players[player.UserId]
 	if not playerData then return end
 
+	-- Atomically increment active bombs BEFORE any yields to prevent race conditions
+	playerData.activeBombs = playerData.activeBombs + 1
+
+	-- Record cooldown timestamp
+	lastBombTime[player.UserId] = tick()
+
 	local arenaFolder = Workspace:FindFirstChild("Arena")
-	if not arenaFolder then return end
+	if not arenaFolder then
+		playerData.activeBombs = playerData.activeBombs - 1
+		return
+	end
 
 	local worldPos = MapData.GridToWorld(gridX, gridY)
 
-	-- Play drop sound immediately
-	if DropSound then
-		local soundPart = Instance.new("Part")
-		soundPart.Anchored = true
-		soundPart.CanCollide = false
-		soundPart.Transparency = 1
-		soundPart.Size = Vector3.new(1, 1, 1)
-		soundPart.Position = worldPos + Vector3.new(0, 1, 0)
-		soundPart.Parent = arenaFolder
+	-- Drop sound is played client-side for instant feedback (see LocalPlayer.client.lua)
 
-		local sound = DropSound:Clone()
-		sound.Parent = soundPart
-		sound:Play()
-		Debris:AddItem(soundPart, sound.TimeLength + 0.5)
+	-- Get bomb model: always clone fresh from the player's equipped skin template.
+	-- This ensures every bomb placed visually matches the player's current skin,
+	-- regardless of what the pool contains.
+	local playerTemplate = GetBombTemplateForPlayer(player)
+	local bomb: Model
+	if playerTemplate and playerTemplate ~= BombTemplate then
+		-- Player has a non-default skin equipped: clone fresh from skin template
+		bomb = CreateBombFromTemplate(playerTemplate)
+		-- Tag so ReturnBombToPool knows to destroy instead of pooling
+		CollectionService:AddTag(bomb, "SkinnedBomb")
+	else
+		-- Default skin: pull from pool (pool only contains default bombs)
+		bomb = GetBombFromPool()
 	end
 
-	-- Get bomb from pool
-	local bomb = GetBombFromPool()
-
-	-- Position bomb
-	local sphere = bomb:FindFirstChild("Sphere") :: Part
-	if sphere then
-		sphere.Position = worldPos + Vector3.new(0, Constants.BOMB_SIZE / 2 + 0.1, 0)
-
-		-- Update fuse position
-		local fuse = bomb:FindFirstChild("Fuse") :: Part
-		if fuse then
-			fuse.CFrame = sphere.CFrame * CFrame.new(0, Constants.BOMB_SIZE / 2 + 0.15, 0) * CFrame.Angles(0, 0, math.rad(90))
-		end
+	-- Position bomb using PrimaryPart
+	local bombPart = bomb.PrimaryPart :: BasePart?
+	if not bombPart then
+		bombPart = bomb:FindFirstChild("Bomb") :: BasePart?
+	end
+	if bombPart then
+		local targetPos = worldPos + Vector3.new(0, Constants.BOMB_SIZE / 2 + 0.1, 0)
+		bomb:PivotTo(CFrame.new(targetPos))
 	end
 
 	bomb.Parent = arenaFolder
+
+	-- Add collision wall so the bomb blocks player movement (like original Bomberman)
+	-- Positioned at TILE_SIZE/2 above grid (same as crate collision boxes)
+	-- Non-collidable until the placing player steps off the tile, then solid for everyone
+	local collisionWall = Instance.new("Part")
+	collisionWall.Name = "BombCollision"
+	collisionWall.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE * 2, Constants.TILE_SIZE)
+	collisionWall.CFrame = CFrame.new(worldPos + Vector3.new(0, Constants.TILE_SIZE, 0))
+	collisionWall.Transparency = 1
+	collisionWall.Anchored = true
+	collisionWall.CanCollide = false
+	collisionWall.CastShadow = false
+	collisionWall.Parent = arenaFolder
+
+	task.spawn(function()
+		-- Wait until the placing player leaves this tile
+		while collisionWall and collisionWall.Parent do
+			local character = player.Character
+			if not character then break end
+			local hrp = character:FindFirstChild("HumanoidRootPart")
+			if not hrp then break end
+			local pX, pY = MapData.WorldToGrid(hrp.Position)
+			if pX ~= gridX or pY ~= gridY then
+				break
+			end
+			task.wait()
+		end
+		if collisionWall and collisionWall.Parent then
+			collisionWall.CanCollide = true
+		end
+	end)
 
 	-- Update grid
 	MapData.SetBomb(gridX, gridY, true)
@@ -353,29 +511,38 @@ function BombService.PlaceBomb(player: Player, gridX: number, gridY: number, ran
 		ownerId = player.UserId,
 		range = range,
 		dangerTiles = dangerTiles,
+		collisionWall = collisionWall,
 	}
 
-	-- Update player bomb count
-	playerData.activeBombs = playerData.activeBombs + 1
+	-- Update player stats (activeBombs already incremented atomically at top of PlaceBomb)
+	playerData.bombs_placed = (playerData.bombs_placed or 0) + 1
 	SyncPlayerData:FireClient(player, playerData)
 
-	-- Bobbing animation
-	if sphere then
-		local bobTween = TweenService:Create(sphere, TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
-			Position = sphere.Position + Vector3.new(0, 0.15, 0)
-		})
-		bobTween:Play()
-	end
+	-- Bobbing animation — move entire model with PivotTo so all parts stay in sync
+	local baseCFrame = bomb:GetPivot()
+	local bobStart = tick()
+	task.spawn(function()
+		while bomb and bomb.Parent == arenaFolder do
+			local elapsed = tick() - bobStart
+			local offset = math.sin(elapsed * math.pi / 0.4) * 0.15
+			bomb:PivotTo(baseCFrame + Vector3.new(0, offset, 0))
+			task.wait()
+		end
+	end)
 
-	-- Fuse flicker
-	local light = bomb:FindFirstChild("Fuse") and bomb.Fuse:FindFirstChild("FuseLight")
-	if light then
-		task.spawn(function()
-			while bomb.Parent == arenaFolder do
-				light.Brightness = math.random(1, 3)
-				task.wait(0.1)
+	-- Fuse flicker on all fuse parts
+	for _, child in ipairs(bomb:GetChildren()) do
+		if child.Name == "Fuse" and child:IsA("BasePart") then
+			local fuseLight = child:FindFirstChild("FuseLight")
+			if fuseLight then
+				task.spawn(function()
+					while bomb.Parent == arenaFolder do
+						fuseLight.Brightness = math.random(1, 3)
+						task.wait(0.1)
+					end
+				end)
 			end
-		end)
+		end
 	end
 
 	-- Schedule explosion
@@ -399,6 +566,11 @@ function BombService.ExplodeBomb(bombKey: string)
 	-- Remove from tracking
 	activeBombs[bombKey] = nil
 	MapData.SetBomb(gridX, gridY, false)
+
+	-- Destroy collision wall
+	if bombData.collisionWall then
+		bombData.collisionWall:Destroy()
+	end
 
 	-- Return bomb to pool
 	ReturnBombToPool(bombData.model)
@@ -434,35 +606,48 @@ function BombService.ExplodeBomb(bombKey: string)
 		Debris:AddItem(soundPart, sound.TimeLength + 0.5)
 	end
 
+	-- Get the player's equipped explosion VFX template
+	local explosionTemplate = nil
+	if InventoryService and VFXFolder then
+		local ownerPlayer = Players:GetPlayerByUserId(ownerId)
+		if ownerPlayer then
+			local modelName = InventoryService.GetEquippedExplosionModel(ownerPlayer)
+			explosionTemplate = VFXFolder:FindFirstChild(modelName)
+		end
+	end
+	-- Fallback chain: equipped -> default red -> old ParticleTemplate
+	if not explosionTemplate then
+		explosionTemplate = DefaultExplosion or ParticleTemplate
+	end
+
 	-- Spawn VFX on ALL tiles simultaneously
-	if ParticleTemplate then
+	if explosionTemplate and arenaFolder then
 		for _, tile in ipairs(affectedTiles) do
 			local worldPos = MapData.GridToWorld(tile.x, tile.y)
 
-			local vfx = ParticleTemplate:Clone()
-			vfx.Position = worldPos + Vector3.new(0, 1, 0)
-			vfx.Anchored = true
-			vfx.CanCollide = false
-			vfx.Transparency = 1
-			vfx.Parent = arenaFolder
+			local vfx = explosionTemplate:Clone()
 
-			-- Enable all particle emitters
-			for _, emitter in ipairs(vfx:GetDescendants()) do
-				if emitter:IsA("ParticleEmitter") then
-					emitter.Enabled = true
+			-- Handle both Part-based and Model-based templates
+			if vfx:IsA("BasePart") then
+				vfx.Position = worldPos + Vector3.new(0, 1, 0)
+				vfx.Anchored = true
+				vfx.CanCollide = false
+				vfx.Transparency = 1
+			elseif vfx:IsA("Model") then
+				-- Model: move via PrimaryPart or PivotTo
+				if vfx.PrimaryPart then
+					vfx.PrimaryPart.Anchored = true
+					vfx.PrimaryPart.CanCollide = false
+					vfx:PivotTo(CFrame.new(worldPos + Vector3.new(0, 1, 0)))
+				else
+					vfx:PivotTo(CFrame.new(worldPos + Vector3.new(0, 1, 0)))
 				end
 			end
 
-			-- Disable after 0.3s, destroy after 1.5s
-			task.delay(0.3, function()
-				if vfx and vfx.Parent then
-					for _, emitter in ipairs(vfx:GetDescendants()) do
-						if emitter:IsA("ParticleEmitter") then
-							emitter.Enabled = false
-						end
-					end
-				end
-			end)
+			vfx.Parent = arenaFolder
+
+			-- Tag for client-side particle emission (server :Emit() doesn't replicate)
+			CollectionService:AddTag(vfx, "ExplosionVFX")
 
 			Debris:AddItem(vfx, 1.5)
 		end
@@ -500,6 +685,73 @@ function BombService.ExplodeBomb(bombKey: string)
 	end
 end
 
+-- Paint a floor tile to a player's color (Color Battle mode)
+function BombService.PaintTile(gridX: number, gridY: number, ownerId: number)
+	local arenaFolder = Workspace:FindFirstChild("Arena")
+	if not arenaFolder then return end
+
+	-- Get the player's color
+	local colorIndex = GameState.colorAssignments[ownerId]
+	if not colorIndex then return end
+	local colorData = Constants.PLAYER_COLORS[colorIndex]
+	if not colorData then return end
+
+	-- Track previous owner for tile count updates
+	local previousOwner = MapData.GetTileOwner(gridX, gridY)
+
+	-- Update grid ownership
+	MapData.SetTileOwner(gridX, gridY, ownerId)
+
+	-- Update tile counts and character stat values
+	local ownerData = GameState.players[ownerId]
+	if ownerData then
+		ownerData.tilesOwned = MapData.CountTilesOwnedBy(ownerId)
+		-- Update character IntValue for nameplate
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p.UserId == ownerId and p.Character then
+				local stats = p.Character:FindFirstChild("PlayerStats")
+				if stats then
+					local tv = stats:FindFirstChild("TilesOwned")
+					if tv then tv.Value = ownerData.tilesOwned end
+				end
+				break
+			end
+		end
+	end
+	if previousOwner ~= 0 and previousOwner ~= ownerId then
+		local prevData = GameState.players[previousOwner]
+		if prevData then
+			prevData.tilesOwned = MapData.CountTilesOwnedBy(previousOwner)
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p.UserId == previousOwner and p.Character then
+					local stats = p.Character:FindFirstChild("PlayerStats")
+					if stats then
+						local tv = stats:FindFirstChild("TilesOwned")
+						if tv then tv.Value = prevData.tilesOwned end
+					end
+					break
+				end
+			end
+		end
+	end
+
+	-- Find and recolor the floor tile
+	local tileName = "FloorTile_" .. gridX .. "_" .. gridY
+	local tile = arenaFolder:FindFirstChild(tileName)
+	if tile then
+		local tileColor = colorData.tile
+		if tile:IsA("BasePart") then
+			tile.Color = tileColor
+		elseif tile:IsA("Model") then
+			for _, part in ipairs(tile:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.Color = tileColor
+				end
+			end
+		end
+	end
+end
+
 -- Process explosion tile (damage, destruction, chain reactions - NO VFX here)
 function BombService.ProcessExplosionTile(gridX: number, gridY: number, ownerId: number)
 	local arenaFolder = Workspace:FindFirstChild("Arena")
@@ -530,11 +782,21 @@ function BombService.ProcessExplosionTile(gridX: number, gridY: number, ownerId:
 					local wallX, wallY = MapData.WorldToGrid(pos)
 					if wallX == gridX and wallY == gridY then
 						MapGenerator.DestroySoftWall(obj, gridX, gridY)
+						-- Track demolition for the bomb owner
+						local ownerData = GameState.players[ownerId]
+						if ownerData then
+							ownerData.demolitions = (ownerData.demolitions or 0) + 1
+						end
 						break
 					end
 				end
 			end
 		end
+	end
+
+	-- Paint tile in Color Battle mode (only walkable tiles, not walls)
+	if GameState.currentMode.paintTiles and MapData.IsWalkable(gridX, gridY) then
+		BombService.PaintTile(gridX, gridY, ownerId)
 	end
 
 	-- Check for player hits
@@ -550,15 +812,8 @@ function BombService.ProcessExplosionTile(gridX: number, gridY: number, ownerId:
 			-- Player is in explosion
 			local playerData = GameState.players[player.UserId]
 			if playerData and playerData.isAlive then
-				-- Award kill to bomb owner
-				if ownerId ~= player.UserId then
-					local ownerData = GameState.players[ownerId]
-					if ownerData then
-						ownerData.kills = ownerData.kills + 1
-					end
-				end
-
-				RoundSystem.DamagePlayer(player)
+				-- Kill credit is handled in RoundSystem.DamagePlayer
+				RoundSystem.DamagePlayer(player, ownerId)
 			end
 		end
 	end
@@ -612,6 +867,11 @@ function BombService.ClearAllBombs()
 	for bombKey, bombData in pairs(activeBombs) do
 		MapData.SetBomb(bombData.gridX, bombData.gridY, false)
 		ReturnBombToPool(bombData.model)
+
+		-- Destroy collision wall
+		if bombData.collisionWall then
+			bombData.collisionWall:Destroy()
+		end
 
 		-- Clean up danger tiles
 		if bombData.dangerTiles then

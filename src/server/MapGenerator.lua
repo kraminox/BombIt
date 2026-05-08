@@ -96,13 +96,23 @@ local function CreateCrate(cframe: CFrame, name: string, crateType: string): Mod
 		end
 	end
 
-	-- Ensure all parts are anchored and have collision
+	-- Disable mesh collision on all parts, use collision box instead
 	for _, part in ipairs(crate:GetDescendants()) do
 		if part:IsA("BasePart") then
 			part.Anchored = true
-			part.CanCollide = true
+			part.CanCollide = false
 		end
 	end
+
+	-- Add invisible collision box for reliable collision
+	local collisionBox = Instance.new("Part")
+	collisionBox.Name = "CollisionBox"
+	collisionBox.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
+	collisionBox.CFrame = cframe
+	collisionBox.Transparency = 1
+	collisionBox.Anchored = true
+	collisionBox.CanCollide = true
+	collisionBox.Parent = crate
 
 	return crate
 end
@@ -134,21 +144,17 @@ function MapGenerator.Initialize()
 		charactersFolder.Parent = ReplicatedStorage
 	end
 
-	-- Load models from ReplicatedStorage
-	modelTemplates.SoftCrate = ReplicatedStorage:FindFirstChild("SoftCrate") :: Model?
-	modelTemplates.HardCrate = ReplicatedStorage:FindFirstChild("HardCrate") :: Model?
-	modelTemplates.LightShade = ReplicatedStorage:FindFirstChild("LightShade") -- Case sensitive!
+	-- Load shade meshes from ReplicatedStorage root
+	modelTemplates.LightShade = ReplicatedStorage:FindFirstChild("LightShade")
 	modelTemplates.DarkShade = ReplicatedStorage:FindFirstChild("DarkShade")
 
-	if modelTemplates.SoftCrate then print("[MapGenerator] Found SoftCrate") end
-	if modelTemplates.HardCrate then print("[MapGenerator] Found HardCrate") end
 	if modelTemplates.LightShade then print("[MapGenerator] Found LightShade") end
 	if modelTemplates.DarkShade then print("[MapGenerator] Found DarkShade") end
 
-	-- Load theme assets from ReplicatedStorage/Assets/Cinema
+	-- Load theme assets from ReplicatedStorage/Assets/Default
 	local AssetsFolder = ReplicatedStorage:FindFirstChild("Assets")
 	if AssetsFolder then
-		local ThemeFolder = AssetsFolder:FindFirstChild("Cinema")
+		local ThemeFolder = AssetsFolder:FindFirstChild("Default")
 		if ThemeFolder then
 			themeAssets.soft = {}
 			themeAssets.hard = {}
@@ -158,9 +164,17 @@ function MapGenerator.Initialize()
 					local assetType = asset:GetAttribute("Type")
 					if assetType == "Soft" then
 						table.insert(themeAssets.soft, asset)
+						-- Also use as fallback SoftCrate template
+						if not modelTemplates.SoftCrate then
+							modelTemplates.SoftCrate = asset
+						end
 						print("[MapGenerator] Found theme soft asset:", asset.Name)
 					elseif assetType == "Hard" then
 						table.insert(themeAssets.hard, asset)
+						-- Also use as fallback HardCrate template
+						if not modelTemplates.HardCrate then
+							modelTemplates.HardCrate = asset
+						end
 						print("[MapGenerator] Found theme hard asset:", asset.Name)
 					else
 						warn("[MapGenerator] Theme asset missing Type attribute:", asset.Name)
@@ -170,7 +184,7 @@ function MapGenerator.Initialize()
 
 			print("[MapGenerator] Loaded", #themeAssets.soft, "soft and", #themeAssets.hard, "hard theme assets")
 		else
-			print("[MapGenerator] No Cinema folder found in Assets")
+			print("[MapGenerator] No Default folder found in Assets")
 		end
 	else
 		print("[MapGenerator] No Assets folder found in ReplicatedStorage")
@@ -224,110 +238,29 @@ local function TryPlaceHard(grid, x, y)
 	grid[x][y] = "hard"
 end
 
--- Map patterns with randomized hard wall placement
-local MAP_PATTERNS = {
-	-- Pattern 1: Scattered random clusters
-	function(grid, w, h)
-		-- Random scatter (~20% density)
-		for x = 2, w - 1 do
-			for y = 2, h - 1 do
-				if math.random() < 0.20 then
-					TryPlaceHard(grid, x, y)
-				end
+-- Classic Bomberman grid layout: hard walls on every even row and column intersection
+local function PlaceBombermanGrid(grid, w, h)
+	for x = 2, w - 1 do
+		for y = 2, h - 1 do
+			-- Place hard wall at every even x AND even y (every other square)
+			if x % 2 == 0 and y % 2 == 0 then
+				TryPlaceHard(grid, x, y)
 			end
 		end
-	end,
-
-	-- Pattern 2: Random clumps (place seeds then grow them)
-	function(grid, w, h)
-		-- Place 12-18 random seed points
-		local seeds = math.random(12, 18)
-		for _ = 1, seeds do
-			local sx = math.random(3, w - 2)
-			local sy = math.random(3, h - 2)
-			TryPlaceHard(grid, sx, sy)
-
-			-- Grow 1-3 neighbors from each seed
-			local growCount = math.random(1, 3)
-			local dirs = {{1,0},{-1,0},{0,1},{0,-1}}
-			for i = 1, growCount do
-				local d = dirs[math.random(1, #dirs)]
-				TryPlaceHard(grid, sx + d[1], sy + d[2])
-			end
-		end
-	end,
-
-	-- Pattern 3: Random with open center
-	function(grid, w, h)
-		local cx, cy = math.ceil(w/2), math.ceil(h/2)
-
-		for x = 2, w - 1 do
-			for y = 2, h - 1 do
-				local distFromCenter = math.abs(x - cx) + math.abs(y - cy)
-				-- Higher chance further from center, no walls near center
-				if distFromCenter > 4 and math.random() < 0.22 then
-					TryPlaceHard(grid, x, y)
-				end
-			end
-		end
-	end,
-
-	-- Pattern 4: Random ring zones
-	function(grid, w, h)
-		local cx, cy = math.ceil(w/2), math.ceil(h/2)
-
-		for x = 2, w - 1 do
-			for y = 2, h - 1 do
-				local dist = math.sqrt((x - cx)^2 + (y - cy)^2)
-				-- Walls more likely in ring bands (3-5 and 7-9 from center)
-				local inRing = (dist >= 3 and dist <= 5) or (dist >= 7 and dist <= 9)
-				if inRing and math.random() < 0.30 then
-					TryPlaceHard(grid, x, y)
-				elseif not inRing and math.random() < 0.08 then
-					TryPlaceHard(grid, x, y)
-				end
-			end
-		end
-	end,
-
-	-- Pattern 5: Random diagonal bias
-	function(grid, w, h)
-		for x = 2, w - 1 do
-			for y = 2, h - 1 do
-				-- Slightly favor diagonal lines for organic feel
-				local onDiag = math.abs(x - y) < 2 or math.abs(x - (Constants.GRID_HEIGHT - y)) < 2
-				local chance = onDiag and 0.30 or 0.12
-				if math.random() < chance then
-					TryPlaceHard(grid, x, y)
-				end
-			end
-		end
-	end,
-
-	-- Pattern 6: Sparse random with small L-shapes
-	function(grid, w, h)
-		-- Place 10-15 random L-shaped pieces
-		local count = math.random(10, 15)
-		for _ = 1, count do
-			local sx = math.random(3, w - 2)
-			local sy = math.random(3, h - 2)
-			TryPlaceHard(grid, sx, sy)
-
-			-- Random L direction
-			local horizontal = math.random() > 0.5
-			local sign = math.random() > 0.5 and 1 or -1
-			if horizontal then
-				TryPlaceHard(grid, sx + sign, sy)
-				TryPlaceHard(grid, sx, sy + (math.random() > 0.5 and 1 or -1))
-			else
-				TryPlaceHard(grid, sx, sy + sign)
-				TryPlaceHard(grid, sx + (math.random() > 0.5 and 1 or -1), sy)
-			end
-		end
-	end,
-}
+	end
+end
 
 function MapGenerator.GenerateMap()
+	-- Defensive: re-verify Arena folder still exists in Workspace
+	if not arenaFolder or not arenaFolder.Parent then
+		arenaFolder = Workspace:FindFirstChild("Arena")
+		if not arenaFolder then
+			arenaFolder = Instance.new("Folder")
+			arenaFolder.Name = "Arena"
+			arenaFolder.Parent = Workspace
+		end
+	end
+
 	-- Clear existing arena
 	arenaFolder:ClearAllChildren()
 
@@ -372,9 +305,8 @@ function MapGenerator.GenerateMap()
 		end
 	end
 
-	-- Pick a random pattern
-	local patternFunc = MAP_PATTERNS[math.random(1, #MAP_PATTERNS)]
-	patternFunc(layoutGrid, w, h)
+	-- Classic Bomberman grid: hard walls on every other square
+	PlaceBombermanGrid(layoutGrid, w, h)
 
 	-- Create floor tiles (checkerboard using LightShade and DarkShade meshes)
 	-- Green colors with subtle contrast
@@ -469,9 +401,18 @@ function MapGenerator.GenerateMap()
 					for _, part in ipairs(asset:GetDescendants()) do
 						if part:IsA("BasePart") then
 							part.Anchored = true
-							part.CanCollide = true
+							part.CanCollide = false -- Disable mesh collision, use collision box instead
 						end
 					end
+					-- Add invisible collision box for reliable collision
+					local collisionBox = Instance.new("Part")
+					collisionBox.Name = "CollisionBox"
+					collisionBox.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
+					collisionBox.CFrame = wallCFrame
+					collisionBox.Transparency = 1
+					collisionBox.Anchored = true
+					collisionBox.CanCollide = true
+					collisionBox.Parent = asset
 					asset.Parent = arenaFolder
 					CollectionService:AddTag(asset, "HardWall")
 					placed = true
@@ -553,9 +494,18 @@ function MapGenerator.GenerateMap()
 					for _, part in ipairs(asset:GetDescendants()) do
 						if part:IsA("BasePart") then
 							part.Anchored = true
-							part.CanCollide = true
+							part.CanCollide = false -- Disable mesh collision, use collision box instead
 						end
 					end
+					-- Add invisible collision box for reliable collision
+					local collisionBox = Instance.new("Part")
+					collisionBox.Name = "CollisionBox"
+					collisionBox.Size = Vector3.new(Constants.TILE_SIZE, Constants.TILE_SIZE, Constants.TILE_SIZE)
+					collisionBox.CFrame = wallCFrame
+					collisionBox.Transparency = 1
+					collisionBox.Anchored = true
+					collisionBox.CanCollide = true
+					collisionBox.Parent = asset
 					asset.Parent = arenaFolder
 					CollectionService:AddTag(asset, "SoftWall")
 					placed = true
@@ -1034,161 +984,6 @@ function MapGenerator.DestroyAllSoftWalls()
 			end
 		end
 	end
-end
-
--- Build winners podium stage
-function MapGenerator.BuildWinnersPodium()
-	local podiumFolder = Workspace:FindFirstChild("WinnersPodium")
-	if not podiumFolder then
-		podiumFolder = Instance.new("Folder")
-		podiumFolder.Name = "WinnersPodium"
-		podiumFolder.Parent = Workspace
-	else
-		podiumFolder:ClearAllChildren()
-	end
-
-	local podiumCenter = Vector3.new(0, 0, 50) -- In front of arena
-
-	-- Create base platform
-	local basePlatform = CreatePart(
-		Vector3.new(30, 2, 20),
-		podiumCenter + Vector3.new(0, -1, 0),
-		Color3.fromRGB(60, 60, 80),
-		"PodiumBase",
-		true
-	)
-	basePlatform.Parent = podiumFolder
-
-	-- Create the 3 podium stands
-	local podiumColors = {
-		Color3.fromRGB(255, 215, 0),  -- Gold for 1st
-		Color3.fromRGB(192, 192, 192), -- Silver for 2nd
-		Color3.fromRGB(205, 127, 50),  -- Bronze for 3rd
-	}
-
-	for i, podData in ipairs(Constants.PODIUM_POSITIONS) do
-		local podiumPart = CreatePart(
-			Vector3.new(5, podData.height, 5),
-			podiumCenter + podData.offset + Vector3.new(0, podData.height / 2, 0),
-			podiumColors[i],
-			"Podium_" .. podData.place,
-			true
-		)
-		podiumPart.Parent = podiumFolder
-
-		-- Add place number label
-		local placeLabel = Instance.new("BillboardGui")
-		placeLabel.Name = "PlaceLabel"
-		placeLabel.Size = UDim2.new(0, 80, 0, 80)
-		placeLabel.StudsOffset = Vector3.new(0, -podData.height / 2 + 1, 2.6)
-		placeLabel.AlwaysOnTop = false
-		placeLabel.Parent = podiumPart
-
-		local placeText = Instance.new("TextLabel")
-		placeText.Size = UDim2.new(1, 0, 1, 0)
-		placeText.BackgroundTransparency = 1
-		placeText.Text = tostring(podData.place)
-		placeText.TextColor3 = Color3.new(1, 1, 1)
-		placeText.TextStrokeTransparency = 0
-		placeText.TextScaled = true
-		placeText.Font = Enum.Font.GothamBold
-		placeText.Parent = placeLabel
-
-		-- Add spotlight
-		local spotlight = Instance.new("SpotLight")
-		spotlight.Face = Enum.NormalId.Top
-		spotlight.Brightness = 5
-		spotlight.Range = 15
-		spotlight.Angle = 60
-		spotlight.Color = podiumColors[i]
-		spotlight.Parent = podiumPart
-	end
-
-	-- Add confetti emitters (particles)
-	for i = 1, 3 do
-		local confettiPart = Instance.new("Part")
-		confettiPart.Name = "ConfettiEmitter_" .. i
-		confettiPart.Size = Vector3.new(1, 1, 1)
-		confettiPart.Position = podiumCenter + Vector3.new((i - 2) * 10, 15, 0)
-		confettiPart.Anchored = true
-		confettiPart.CanCollide = false
-		confettiPart.Transparency = 1
-		confettiPart.Parent = podiumFolder
-
-		local confetti = Instance.new("ParticleEmitter")
-		confetti.Name = "Confetti"
-		confetti.Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 100, 100)),
-			ColorSequenceKeypoint.new(0.25, Color3.fromRGB(100, 255, 100)),
-			ColorSequenceKeypoint.new(0.5, Color3.fromRGB(100, 100, 255)),
-			ColorSequenceKeypoint.new(0.75, Color3.fromRGB(255, 255, 100)),
-			ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 100, 255)),
-		})
-		confetti.Size = NumberSequence.new(0.3, 0.1)
-		confetti.Lifetime = NumberRange.new(3, 5)
-		confetti.Rate = 20
-		confetti.Speed = NumberRange.new(5, 10)
-		confetti.SpreadAngle = Vector2.new(180, 180)
-		confetti.RotSpeed = NumberRange.new(-180, 180)
-		confetti.Enabled = false -- Enabled during winners stage
-		confetti.Parent = confettiPart
-	end
-
-	-- Background decoration
-	local backdrop = CreatePart(
-		Vector3.new(40, 20, 2),
-		podiumCenter + Vector3.new(0, 9, -12),
-		Color3.fromRGB(40, 40, 60),
-		"Backdrop",
-		true
-	)
-	backdrop.Parent = podiumFolder
-
-	-- "WINNERS" text on backdrop
-	local winnersLabel = Instance.new("BillboardGui")
-	winnersLabel.Name = "WinnersLabel"
-	winnersLabel.Size = UDim2.new(0, 300, 0, 80)
-	winnersLabel.StudsOffset = Vector3.new(0, 5, 1.1)
-	winnersLabel.AlwaysOnTop = false
-	winnersLabel.Parent = backdrop
-
-	local winnersText = Instance.new("TextLabel")
-	winnersText.Size = UDim2.new(1, 0, 1, 0)
-	winnersText.BackgroundTransparency = 1
-	winnersText.Text = "🏆 WINNERS 🏆"
-	winnersText.TextColor3 = Color3.fromRGB(255, 215, 0)
-	winnersText.TextStrokeTransparency = 0
-	winnersText.TextScaled = true
-	winnersText.Font = Enum.Font.GothamBold
-	winnersText.Parent = winnersLabel
-
-	return podiumFolder
-end
-
--- Enable/disable confetti
-function MapGenerator.SetConfettiEnabled(enabled: boolean)
-	local podiumFolder = Workspace:FindFirstChild("WinnersPodium")
-	if not podiumFolder then return end
-
-	for _, child in ipairs(podiumFolder:GetChildren()) do
-		if child.Name:match("ConfettiEmitter") then
-			local confetti = child:FindFirstChild("Confetti")
-			if confetti then
-				confetti.Enabled = enabled
-			end
-		end
-	end
-end
-
--- Get podium spawn position for a place (1, 2, or 3)
-function MapGenerator.GetPodiumPosition(place: number): Vector3
-	local podiumCenter = Vector3.new(0, 0, 50)
-	for _, podData in ipairs(Constants.PODIUM_POSITIONS) do
-		if podData.place == place then
-			return podiumCenter + podData.offset + Vector3.new(0, podData.height + 3, 0)
-		end
-	end
-	return podiumCenter + Vector3.new(0, 10, 0)
 end
 
 return MapGenerator

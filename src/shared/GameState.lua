@@ -14,12 +14,15 @@ GameState.currentState = Constants.STATES.LOBBY
 GameState.currentMode = Constants.MODES.FFA
 GameState.roundTimer = 0
 GameState.players = {} -- {[userId] = playerData}
+GameState.persistentData = {} -- {[userId] = {totalXp: number}}
+GameState.colorAssignments = {} :: {[number]: number} -- {[userId] = colorIndex} for Color Battle
+GameState.teamAssignments = {} :: {[number]: number} -- {[userId] = teamIndex} for team modes
+GameState.gamepassCache = {} :: {[number]: {vip: boolean, doubleCoins: boolean, allBlue: boolean}} -- {[userId] = passes}
+GameState.luckBoostExpiry = {} :: {[number]: number} -- {[userId] = os.time() expiry timestamp}
 
 -- Player data structure
 export type PlayerData = {
 	userId: number,
-	characterId: number,
-	equippedCosmetics: {string}, -- list of accessory names from Outfit1
 	lives: number,
 	bombCount: number,
 	bombRange: number,
@@ -27,16 +30,19 @@ export type PlayerData = {
 	hasShield: boolean,
 	coins: number,
 	kills: number,
+	demolitions: number,
+	powerupsCollected: number,
 	isAlive: boolean,
 	activeBombs: number,
 	curseEndTime: number?,
+	colorIndex: number,
+	tilesOwned: number,
+	invulnerable: boolean,
 }
 
 function GameState.CreatePlayerData(userId: number): PlayerData
 	return {
 		userId = userId,
-		characterId = 1,
-		equippedCosmetics = {},
 		lives = Constants.PLAYER_LIVES_DEFAULT,
 		bombCount = Constants.MAX_BOMBS_DEFAULT,
 		bombRange = Constants.BOMB_DEFAULT_RANGE,
@@ -44,9 +50,14 @@ function GameState.CreatePlayerData(userId: number): PlayerData
 		hasShield = false,
 		coins = 0,
 		kills = 0,
+		demolitions = 0,
+		powerupsCollected = 0,
 		isAlive = true,
 		activeBombs = 0,
 		curseEndTime = nil,
+		colorIndex = 0,
+		tilesOwned = 0,
+		invulnerable = false,
 	}
 end
 
@@ -57,9 +68,15 @@ function GameState.ResetPlayerForRound(playerData: PlayerData)
 	playerData.speed = Constants.MOVE_SPEED
 	playerData.hasShield = false
 	playerData.coins = 0
+	playerData.kills = 0
+	playerData.demolitions = 0
+	playerData.powerupsCollected = 0
 	playerData.isAlive = true
 	playerData.activeBombs = 0
 	playerData.curseEndTime = nil
+	playerData.colorIndex = 0
+	playerData.tilesOwned = 0
+	playerData.invulnerable = false
 end
 
 function GameState.ApplyPowerUp(playerData: PlayerData, powerUpType: string)
@@ -106,6 +123,12 @@ function GameState.GetPlayerCount(): number
 		count = count + 1
 	end
 	return count
+end
+
+-- AFK check — set by GameManager, called by RoundSystem
+-- Default implementation (overridden by GameManager at runtime)
+GameState.IsPlayerAFK = function(_userId: number): boolean
+	return false
 end
 
 return GameState

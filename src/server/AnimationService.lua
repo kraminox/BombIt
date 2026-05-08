@@ -13,7 +13,9 @@ local GameState = require(Shared:WaitForChild("GameState"))
 
 local AnimationService = {}
 
-local HOLDBOMB_ANIM_ID = "rbxassetid://75397675845790"
+local HOLDBOMB_ANIM_ID = "rbxassetid://130919061003460"
+local WALK_ANIM_ID = "rbxassetid://78850752835842"
+local RUN_ANIM_ID = "rbxassetid://129243147944322"
 
 -- Per-character state
 type CharacterState = {
@@ -29,9 +31,6 @@ local characterStates: {[Model]: CharacterState} = {}
 function AnimationService.SetupCharacter(character: Model)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if not humanoid then return end
-
-	local animSaves = character:FindFirstChild("AnimSaves")
-	if not animSaves then return end
 
 	-- Get or create Animator
 	local animator = humanoid:FindFirstChildOfClass("Animator")
@@ -52,7 +51,7 @@ function AnimationService.SetupCharacter(character: Model)
 	if success and track then
 		holdBombTrack = track
 		track.Looped = true
-		track.Priority = Enum.AnimationPriority.Action2
+		track.Priority = Enum.AnimationPriority.Action
 	else
 		warn("[AnimationService] Failed to load holdbomb for", character.Name)
 	end
@@ -64,7 +63,27 @@ function AnimationService.SetupCharacter(character: Model)
 		character = character,
 	}
 
-	print("[AnimationService] Set up hold bomb for", character.Name)
+	-- Override default walk/run animations in the Animate script
+	local animate = character:FindFirstChild("Animate")
+	if animate then
+		local walkAnim = animate:FindFirstChild("walk")
+		if walkAnim then
+			local walkId = walkAnim:FindFirstChild("WalkAnim")
+			if walkId and walkId:IsA("Animation") then
+				walkId.AnimationId = WALK_ANIM_ID
+			end
+		end
+
+		local runAnim = animate:FindFirstChild("run")
+		if runAnim then
+			local runId = runAnim:FindFirstChild("RunAnim")
+			if runId and runId:IsA("Animation") then
+				runId.AnimationId = RUN_ANIM_ID
+			end
+		end
+	end
+
+	print("[AnimationService] Set up character for", character.Name)
 end
 
 -- Remove tracking when character is removed

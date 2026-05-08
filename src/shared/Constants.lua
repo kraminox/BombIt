@@ -33,18 +33,67 @@ Constants.INVINCIBILITY_FRAMES = 1.5 -- Seconds of invincibility after hit
 
 -- Map Generation
 Constants.SOFT_WALL_DENSITY = 0.55
-Constants.POWERUP_SPAWN_CHANCE = 0.45
+Constants.POWERUP_SPAWN_CHANCE = 0.30
 Constants.COIN_SPAWN_CHANCE = 0.50 -- For Coin Grab mode
 
 -- Round Timing
-Constants.LOBBY_WAIT_TIME = 10
+Constants.LOBBY_WAIT_TIME = 20
 Constants.CHARACTER_SELECT_TIME = 8
 Constants.COUNTDOWN_TIME = 3
 Constants.ROUND_LENGTH = 120 -- 2 minutes
 Constants.ROUND_END_TIME = 3
-Constants.INTERMISSION_TIME = 4
-Constants.MIN_PLAYERS = 1 -- Set to 1 for testing
+Constants.INTERMISSION_TIME = 30
+Constants.MIN_PLAYERS = 2
 Constants.MAX_PLAYERS = 6
+
+-- XP Rewards
+Constants.XP_PER_KILL = 100
+Constants.XP_PER_DEMOLITION = 10
+Constants.XP_PER_POWERUP = 25
+Constants.XP_WIN_BONUS = 200
+
+-- XP Leveling
+Constants.XP_PER_LEVEL_BASE = 300
+Constants.XP_PER_LEVEL_GROWTH = 100
+-- XP needed for level L = BASE + (L-1) * GROWTH
+-- Level 1: 300, Level 2: 400, Level 5: 700, Level 10: 1200, Level 20: 2200
+
+function Constants.GetLevelInfo(totalXp: number): (number, number, number)
+	-- Returns: level, xpProgressInLevel, xpNeededForLevel
+	local level = 1
+	local remaining = totalXp
+	while true do
+		local needed = Constants.XP_PER_LEVEL_BASE + (level - 1) * Constants.XP_PER_LEVEL_GROWTH
+		if remaining < needed then
+			return level, remaining, needed
+		end
+		remaining = remaining - needed
+		level = level + 1
+	end
+end
+
+-- Level titles (sorted by min level, highest first for lookup)
+Constants.LEVEL_TITLES = {
+	{minLevel = 50, title = "Bomb God"},
+	{minLevel = 40, title = "Demolition King"},
+	{minLevel = 30, title = "Blast Master"},
+	{minLevel = 25, title = "Bomb Expert"},
+	{minLevel = 20, title = "Detonator"},
+	{minLevel = 15, title = "Dynamite"},
+	{minLevel = 10, title = "Firecracker"},
+	{minLevel = 7,  title = "Fuse Lighter"},
+	{minLevel = 4,  title = "Spark"},
+	{minLevel = 1,  title = "Rookie"},
+}
+
+function Constants.GetTitle(level: number): string
+	for _, entry in ipairs(Constants.LEVEL_TITLES) do
+		if level >= entry.minLevel then
+			return entry.title
+		end
+	end
+	return "Rookie"
+end
 
 -- VFX
 Constants.EXPLOSION_DURATION = 0.4
@@ -91,32 +140,19 @@ Constants.POWERUP_TYPES = {
 	},
 }
 
--- Character Data
-Constants.CHARACTERS = {
-	{
-		id = 1,
-		name = "Pink",
-		cosmeticsFolder = "PinkAssets",
-	},
-	{
-		id = 2,
-		name = "Blue",
-		cosmeticsFolder = "BlueAssets",
-	},
-	{
-		id = 3,
-		name = "Orange",
-		cosmeticsFolder = "OrangeAssets",
-	},
-}
+-- Player scale when in-game (slightly smaller for arena feel)
+Constants.IN_GAME_SCALE = 0.85
 
 -- Game States
 Constants.STATES = {
 	LOBBY = "Lobby",
 	CHARACTER_SELECT = "CharacterSelect",
+	PREPARING = "Preparing",
 	COUNTDOWN = "Countdown",
 	PLAYING = "Playing",
 	ROUND_END = "RoundEnd",
+	ROUND_RESULTS = "RoundResults",
+	FADE_TO_LOBBY = "FadeToLobby",
 	INTERMISSION = "Intermission",
 }
 
@@ -147,6 +183,43 @@ Constants.MODES = {
 		collectCoins = true,
 		coinTarget = 10,
 	},
+	COLOR_BATTLE = {
+		id = "COLOR_BATTLE",
+		name = "Color Battle",
+		maxPlayers = 6,
+		lives = 1,
+		teamSize = 1,
+		collectCoins = false,
+		paintTiles = true,
+	},
+	FALLING_TILES = {
+		id = "FALLING_TILES",
+		name = "Falling Tiles",
+		maxPlayers = 6,
+		lives = 1,
+		teamSize = 1,
+		collectCoins = false,
+		fallingTiles = true,
+	},
+	RESPAWN = {
+		id = "RESPAWN",
+		name = "Respawn",
+		maxPlayers = 6,
+		lives = 1,
+		teamSize = 1,
+		collectCoins = false,
+		respawn = true,
+	},
+}
+
+-- Player colors for Color Battle mode (up to 6 players)
+Constants.PLAYER_COLORS = {
+	{ name = "Red",    fill = Color3.fromRGB(255, 50, 50),   stroke = Color3.fromRGB(140, 15, 15),  tile = Color3.fromRGB(255, 70, 70) },
+	{ name = "Blue",   fill = Color3.fromRGB(50, 100, 255),  stroke = Color3.fromRGB(15, 35, 140),  tile = Color3.fromRGB(70, 120, 255) },
+	{ name = "Yellow", fill = Color3.fromRGB(255, 220, 40),  stroke = Color3.fromRGB(140, 110, 10), tile = Color3.fromRGB(255, 230, 70) },
+	{ name = "White",  fill = Color3.fromRGB(240, 240, 240), stroke = Color3.fromRGB(120, 120, 120), tile = Color3.fromRGB(245, 245, 245) },
+	{ name = "Pink",   fill = Color3.fromRGB(255, 100, 180), stroke = Color3.fromRGB(140, 40, 90),  tile = Color3.fromRGB(255, 120, 190) },
+	{ name = "Black",  fill = Color3.fromRGB(40, 40, 40),    stroke = Color3.fromRGB(10, 10, 10),   tile = Color3.fromRGB(55, 55, 55) },
 }
 
 -- Admin Events
@@ -183,12 +256,72 @@ Constants.STICKERS = {
 	{id = "oof", text = "OOF", color = Color3.fromRGB(255, 150, 50)},
 }
 
--- Winners podium positions (relative to podium center)
-Constants.PODIUM_POSITIONS = {
-	{place = 1, offset = Vector3.new(0, 6, 0), height = 6},      -- 1st place (center, tallest)
-	{place = 2, offset = Vector3.new(-6, 4, 0), height = 4},    -- 2nd place (left)
-	{place = 3, offset = Vector3.new(6, 2, 0), height = 2},     -- 3rd place (right)
+-- Game Mode Selection (slot machine UI)
+Constants.PLAYER_FORMATS = {
+	{ id = "FFA", name = "FFA", teamSize = 1 },
+	{ id = "2V2", name = "2v2", teamSize = 2 },
+	{ id = "3V3", name = "3v3", teamSize = 3 },
 }
+
+Constants.GAME_TYPES = {
+	{ id = "STANDARD", name = "Standard" },
+	{ id = "COLOR_BATTLE", name = "Color Battle" },
+	{ id = "FLOOR_IS_LAVA", name = "Floor is Lava" },
+	{ id = "RESPAWN", name = "Respawn" },
+}
+
+Constants.MODE_SELECTION_DURATION = 5
+
+-- Maps (formatId .. "_" .. typeId) → MODES key
+Constants.MODE_MAP = {
+	FFA_STANDARD = "FFA",
+	FFA_COLOR_BATTLE = "COLOR_BATTLE",
+	FFA_FLOOR_IS_LAVA = "FALLING_TILES",
+	["2V2_STANDARD"] = "FFA",
+	["2V2_COLOR_BATTLE"] = "COLOR_BATTLE",
+	["2V2_FLOOR_IS_LAVA"] = "FALLING_TILES",
+	["3V3_STANDARD"] = "TEAM",
+	["3V3_COLOR_BATTLE"] = "COLOR_BATTLE",
+	["3V3_FLOOR_IS_LAVA"] = "FALLING_TILES",
+	FFA_RESPAWN = "RESPAWN",
+	["2V2_RESPAWN"] = "RESPAWN",
+	["3V3_RESPAWN"] = "RESPAWN",
+}
+
+-- Look up MODE_MAP, shallow-copy the base mode table, override teamSize from format
+function Constants.GetModeFromCombo(formatId: string, typeId: string)
+	local key = formatId .. "_" .. typeId
+	local modeKey = Constants.MODE_MAP[key]
+	if not modeKey then
+		modeKey = "FFA"
+	end
+
+	local baseMode = Constants.MODES[modeKey]
+	if not baseMode then
+		baseMode = Constants.MODES.FFA
+	end
+
+	-- Shallow copy
+	local mode = {}
+	for k, v in pairs(baseMode) do
+		mode[k] = v
+	end
+
+	-- Override teamSize from the format entry
+	for _, fmt in ipairs(Constants.PLAYER_FORMATS) do
+		if fmt.id == formatId then
+			mode.teamSize = fmt.teamSize
+			break
+		end
+	end
+
+	return mode
+end
+
+-- Respawn Mode
+Constants.RESPAWN_INVULN_DURATION = 3    -- seconds of invulnerability after respawn
+Constants.RESPAWN_BLINK_INTERVAL = 0.15  -- seconds per blink cycle
+Constants.RESPAWN_DELAY = 1.5            -- seconds of ragdoll before teleporting
 
 -- Sound IDs (Roblox asset IDs) - using verified working sounds
 Constants.SOUNDS = {

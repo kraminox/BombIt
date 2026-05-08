@@ -1,11 +1,10 @@
 --!strict
 -- WinnersUI.client.lua
--- Winners podium UI with emotes and stickers
+-- Results screen using pre-built ResultsUI ScreenGui + XPProgress bar + cinematic bars
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
-local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -14,145 +13,154 @@ local playerGui = player:WaitForChild("PlayerGui")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Constants = require(Shared:WaitForChild("Constants"))
 
+-- Sound effects
+local SoundsFolder = ReplicatedStorage:FindFirstChild("Sounds")
+local UISounds = SoundsFolder and SoundsFolder:FindFirstChild("UI")
+local xpDingSound: Sound? = UISounds and UISounds:FindFirstChild("XPDing") :: Sound? or nil
+local achieveSound: Sound? = UISounds and UISounds:FindFirstChild("Achieve") :: Sound? or nil
+
 -- Wait for remotes
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local RoundStateChanged = Remotes:WaitForChild("RoundStateChanged")
 
--- These are created by the server during RoundSystem.Initialize
-local PlayEmote
+-- Sticker remote (created by server)
 local ShowSticker
 
 task.spawn(function()
-	PlayEmote = Remotes:WaitForChild("PlayEmote", 10)
 	ShowSticker = Remotes:WaitForChild("ShowSticker", 10)
 end)
 
--- UI elements
-local screenGui: ScreenGui
-local emoteFrame: Frame
-local stickerFrame: Frame
+-- ResultsUI references (pre-built ScreenGui)
+local resultsUI = playerGui:WaitForChild("ResultsUI")
+local parentFrame = resultsUI:WaitForChild("ParentFrame")
+local topDivider = parentFrame:WaitForChild("TopDivider")
+local resultLabel = parentFrame:WaitForChild("ResultLabel") :: TextLabel
+local killsLabel = parentFrame:WaitForChild("KillsLabel") :: TextLabel
+local demosLabel = parentFrame:WaitForChild("DemosLabel") :: TextLabel
+local powersLabel = parentFrame:WaitForChild("PowersLabel") :: TextLabel
+local rewardFrame = parentFrame:WaitForChild("RewardFrame")
+local coinsImage = rewardFrame:WaitForChild("CoinsImage")
+local coinsValue = rewardFrame:WaitForChild("CoinsValue") :: TextLabel
+local xpImage = rewardFrame:WaitForChild("XpImage")
+local xpValue = rewardFrame:WaitForChild("XpValue") :: TextLabel
+local capsuleImage = rewardFrame:WaitForChild("CapsuleImage")
+local capsuleValue = rewardFrame:WaitForChild("CapsuleValue") :: TextLabel
+
+-- XPProgress references (pre-built ScreenGui)
+local xpProgressUI = playerGui:WaitForChild("XPProgress")
+local xpProgressFrame = xpProgressUI:WaitForChild("ParentFrame")
+local xpFill = xpProgressFrame:WaitForChild("ProgressFill") :: Frame
+local xpStarImage = xpProgressFrame:WaitForChild("StarImage") :: ImageLabel
+local xpStudBg = xpProgressFrame:WaitForChild("StudBg") :: ImageLabel
+local xpProgressText = xpProgressFrame:WaitForChild("ProgressValue") :: TextLabel
+local xpLevelText = xpProgressFrame:WaitForChild("LevelValue") :: TextLabel
+
+-- Store original sizes/positions for animations
+local killsOriginalSize: UDim2
+local demosOriginalSize: UDim2
+local powersOriginalSize: UDim2
+local parentFrameOriginalPosition: UDim2
+local rewardFrameOriginalSize: UDim2
+local xpProgressFrameOrigPos: UDim2
+local xpFillOrigSize: UDim2
+local xpStarOrigSize: UDim2
+
+-- Cinematic bars (code-created)
+local topBar: Frame
+local bottomBar: Frame
+local BAR_HEIGHT = 0.10
+
+-- Full-screen black fade for round transitions
+local fadeOverlay: Frame? = nil
 
 -- Track active stickers
 local activeStickers = {}
 
--- Create UI
-local function CreateUI()
-	screenGui = Instance.new("ScreenGui")
-	screenGui.Name = "WinnersUI"
-	screenGui.ResetOnSpawn = false
-	screenGui.Enabled = false
-	screenGui.Parent = playerGui
+-- Track animation state
+local isShowing = false
 
-	-- Combined emotes & stickers frame (bottom center) - single compact bar
-	emoteFrame = Instance.new("Frame")
-	emoteFrame.Name = "ActionsFrame"
-	emoteFrame.Size = UDim2.new(0, 400, 0, 50)
-	emoteFrame.Position = UDim2.new(0.5, -200, 1, -70)
-	emoteFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-	emoteFrame.BackgroundTransparency = 0.2
-	emoteFrame.Parent = screenGui
+-- Track current game mode (updated from state changes)
+local currentMode: any = nil
 
-	local frameCorner = Instance.new("UICorner")
-	frameCorner.CornerRadius = UDim.new(0, 25)
-	frameCorner.Parent = emoteFrame
+-- Helper: play a tween and return it
+local function PlayTween(instance: Instance, info: TweenInfo, props: {[string]: any}): Tween
+	local tween = TweenService:Create(instance, info, props)
+	tween:Play()
+	return tween
+end
 
-	local actionsContainer = Instance.new("Frame")
-	actionsContainer.Name = "Container"
-	actionsContainer.Size = UDim2.new(1, -20, 1, -10)
-	actionsContainer.Position = UDim2.new(0, 10, 0, 5)
-	actionsContainer.BackgroundTransparency = 1
-	actionsContainer.Parent = emoteFrame
+-- Initialize: grab original sizes and hide everything
+local function InitializeUI()
+	killsOriginalSize = killsLabel.Size
+	demosOriginalSize = demosLabel.Size
+	powersOriginalSize = powersLabel.Size
+	parentFrameOriginalPosition = parentFrame.Position
+	rewardFrameOriginalSize = rewardFrame.Size
 
-	local actionsLayout = Instance.new("UIListLayout")
-	actionsLayout.FillDirection = Enum.FillDirection.Horizontal
-	actionsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	actionsLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-	actionsLayout.Padding = UDim.new(0, 8)
-	actionsLayout.Parent = actionsContainer
+	xpProgressFrameOrigPos = xpProgressFrame.Position
+	xpFillOrigSize = xpFill.Size
+	xpStarOrigSize = xpStarImage.Size
 
-	-- Create emote buttons (just icons)
-	for _, emote in ipairs(Constants.EMOTES) do
-		local btn = Instance.new("TextButton")
-		btn.Name = emote.id
-		btn.Size = UDim2.new(0, 36, 0, 36)
-		btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-		btn.Text = emote.icon
-		btn.TextSize = 18
-		btn.Font = Enum.Font.GothamBold
-		btn.Parent = actionsContainer
+	-- Hide ResultsUI
+	resultsUI.Enabled = false
+	parentFrame.Visible = false
+	resultLabel.Visible = false
+	killsLabel.Visible = false
+	demosLabel.Visible = false
+	powersLabel.Visible = false
+	rewardFrame.Visible = false
+	capsuleImage.Visible = false
+	capsuleValue.Visible = false
+	xpImage.Visible = false
+	xpValue.Visible = false
 
-		local btnCorner = Instance.new("UICorner")
-		btnCorner.CornerRadius = UDim.new(1, 0)
-		btnCorner.Parent = btn
+	-- Hide XPProgress
+	xpProgressUI.Enabled = false
+end
 
-		btn.MouseButton1Click:Connect(function()
-			if PlayEmote then
-				PlayEmote:FireServer(emote.id)
-			end
-		end)
+-- Create cinematic bars and emote frame
+local function CreateCinematicUI()
+	-- Cinematic ScreenGui (separate so it layers correctly)
+	local cinematicGui = Instance.new("ScreenGui")
+	cinematicGui.Name = "CinematicUI"
+	cinematicGui.ResetOnSpawn = false
+	cinematicGui.DisplayOrder = 10
+	cinematicGui.IgnoreGuiInset = true
+	cinematicGui.Enabled = false
+	cinematicGui.Parent = playerGui
 
-		btn.MouseEnter:Connect(function()
-			TweenService:Create(btn, TweenInfo.new(0.1), {
-				BackgroundColor3 = Color3.fromRGB(70, 70, 90),
-				Size = UDim2.new(0, 40, 0, 40)
-			}):Play()
-		end)
+	-- Top bar
+	topBar = Instance.new("Frame")
+	topBar.Name = "TopBar"
+	topBar.Size = UDim2.new(1, 0, BAR_HEIGHT, 0)
+	topBar.Position = UDim2.new(0, 0, -BAR_HEIGHT, 0)
+	topBar.BackgroundColor3 = Color3.new(0, 0, 0)
+	topBar.BorderSizePixel = 0
+	topBar.ZIndex = 5
+	topBar.Parent = cinematicGui
 
-		btn.MouseLeave:Connect(function()
-			TweenService:Create(btn, TweenInfo.new(0.1), {
-				BackgroundColor3 = Color3.fromRGB(50, 50, 60),
-				Size = UDim2.new(0, 36, 0, 36)
-			}):Play()
-		end)
-	end
+	-- Bottom bar
+	bottomBar = Instance.new("Frame")
+	bottomBar.Name = "BottomBar"
+	bottomBar.Size = UDim2.new(1, 0, BAR_HEIGHT, 0)
+	bottomBar.Position = UDim2.new(0, 0, 1, 0)
+	bottomBar.BackgroundColor3 = Color3.new(0, 0, 0)
+	bottomBar.BorderSizePixel = 0
+	bottomBar.ZIndex = 5
+	bottomBar.Parent = cinematicGui
 
-	-- Divider
-	local divider = Instance.new("Frame")
-	divider.Name = "Divider"
-	divider.Size = UDim2.new(0, 2, 0.6, 0)
-	divider.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
-	divider.BorderSizePixel = 0
-	divider.Parent = actionsContainer
+	-- Full-screen black fade overlay (hidden by default, used during round prep)
+	fadeOverlay = Instance.new("Frame")
+	fadeOverlay.Name = "FadeOverlay"
+	fadeOverlay.Size = UDim2.new(1, 0, 1, 0)
+	fadeOverlay.Position = UDim2.new(0, 0, 0, 0)
+	fadeOverlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	fadeOverlay.BackgroundTransparency = 1
+	fadeOverlay.BorderSizePixel = 0
+	fadeOverlay.ZIndex = 10
+	fadeOverlay.Parent = cinematicGui
 
-	-- Create sticker buttons (compact text)
-	for _, sticker in ipairs(Constants.STICKERS) do
-		local btn = Instance.new("TextButton")
-		btn.Name = sticker.id
-		btn.Size = UDim2.new(0, 36, 0, 36)
-		btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-		btn.Text = string.sub(sticker.text, 1, 2)
-		btn.TextColor3 = sticker.color
-		btn.TextSize = 12
-		btn.Font = Enum.Font.GothamBold
-		btn.Parent = actionsContainer
-
-		local btnCorner = Instance.new("UICorner")
-		btnCorner.CornerRadius = UDim.new(1, 0)
-		btnCorner.Parent = btn
-
-		btn.MouseButton1Click:Connect(function()
-			if ShowSticker then
-				ShowSticker:FireServer(sticker.id)
-			end
-		end)
-
-		btn.MouseEnter:Connect(function()
-			TweenService:Create(btn, TweenInfo.new(0.1), {
-				BackgroundColor3 = Color3.fromRGB(70, 70, 90),
-				Size = UDim2.new(0, 40, 0, 40)
-			}):Play()
-		end)
-
-		btn.MouseLeave:Connect(function()
-			TweenService:Create(btn, TweenInfo.new(0.1), {
-				BackgroundColor3 = Color3.fromRGB(50, 50, 60),
-				Size = UDim2.new(0, 36, 0, 36)
-			}):Play()
-		end)
-	end
-
-	-- Unused but kept for compatibility
-	stickerFrame = emoteFrame
+	return cinematicGui
 end
 
 -- Show sticker above player's head
@@ -163,7 +171,6 @@ local function DisplaySticker(userId: number, stickerId: string)
 	local head = targetPlayer.Character:FindFirstChild("Head")
 	if not head then return end
 
-	-- Find sticker data
 	local stickerData
 	for _, sticker in ipairs(Constants.STICKERS) do
 		if sticker.id == stickerId then
@@ -171,15 +178,12 @@ local function DisplaySticker(userId: number, stickerId: string)
 			break
 		end
 	end
-
 	if not stickerData then return end
 
-	-- Remove existing sticker for this player
 	if activeStickers[userId] then
 		activeStickers[userId]:Destroy()
 	end
 
-	-- Create sticker billboard
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = "Sticker_" .. stickerId
 	billboard.Size = UDim2.new(0, 100, 0, 50)
@@ -203,22 +207,15 @@ local function DisplaySticker(userId: number, stickerId: string)
 
 	activeStickers[userId] = billboard
 
-	-- Animate in
 	billboard.StudsOffset = Vector3.new(0, 2, 0)
-	TweenService:Create(billboard, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+	PlayTween(billboard, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 		StudsOffset = Vector3.new(0, 3, 0)
-	}):Play()
+	})
 
-	-- Remove after 3 seconds
 	task.delay(3, function()
 		if billboard and billboard.Parent then
-			TweenService:Create(billboard, TweenInfo.new(0.2), {
-				StudsOffset = Vector3.new(0, 4, 0)
-			}):Play()
-			TweenService:Create(stickerLabel, TweenInfo.new(0.2), {
-				BackgroundTransparency = 1,
-				TextTransparency = 1
-			}):Play()
+			PlayTween(billboard, TweenInfo.new(0.2), { StudsOffset = Vector3.new(0, 4, 0) })
+			PlayTween(stickerLabel, TweenInfo.new(0.2), { BackgroundTransparency = 1, TextTransparency = 1 })
 			task.wait(0.2)
 			billboard:Destroy()
 			if activeStickers[userId] == billboard then
@@ -228,42 +225,582 @@ local function DisplaySticker(userId: number, stickerId: string)
 	end)
 end
 
--- Show winners UI (just the action bar)
-local function Show()
-	screenGui.Enabled = true
-
-	-- Animate in from bottom
-	emoteFrame.Position = UDim2.new(0.5, -200, 1, 50)
-	TweenService:Create(emoteFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-		Position = UDim2.new(0.5, -200, 1, -70)
-	}):Play()
+-- Find local player's stats from results
+local function FindPlayerStats(results: any, userId: number): (number, number, number, number, number, number)
+	local coins, kills, demolitions, powerups, xp, tilesOwned = 0, 0, 0, 0, 0, 0
+	if results then
+		for _, result in ipairs(results) do
+			if result.userId == userId then
+				coins = result.coins or 0
+				kills = result.kills or 0
+				demolitions = result.demolitions or 0
+				powerups = result.powerupsCollected or 0
+				xp = result.xp or 0
+				tilesOwned = result.tilesOwned or 0
+				break
+			end
+		end
+	end
+	-- Ensure minimum rewards are always shown
+	coins = math.max(coins, 50)
+	xp = math.max(xp, 100)
+	return coins, kills, demolitions, powerups, xp, tilesOwned
 end
 
--- Hide winners UI
-local function Hide()
-	TweenService:Create(emoteFrame, TweenInfo.new(0.3), {
-		Position = UDim2.new(0.5, -200, 1, 50)
-	}):Play()
+-- Find local player's XP progression from results
+local function FindPlayerXPProgression(results: any, userId: number): (number, number)
+	local xpBefore, xpAfter = 0, 0
+	if results then
+		for _, result in ipairs(results) do
+			if result.userId == userId then
+				xpBefore = result.xpBefore or 0
+				xpAfter = result.xpAfter or 0
+				break
+			end
+		end
+	end
+	return xpBefore, xpAfter
+end
 
+-- Typewriter count-up animation with ding sounds and achieve on land (reusable for coins, XP, etc.)
+local function AnimateCountUp(label: TextLabel, finalValue: number)
+	-- Ensure label is visible and not transparent
+	label.Visible = true
+	label.TextTransparency = 0
+	label.Text = "0"
+	if finalValue == 0 then return end
+
+	local duration = 0.8
+	local steps = math.min(finalValue, 40)
+	local stepTime = duration / steps
+
+	-- Play XPDing every few steps
+	local dingInterval = math.max(1, math.floor(steps / 8))
+
+	for i = 1, steps do
+		local value = math.floor((i / steps) * finalValue)
+		-- Format large numbers
+		if value >= 1000 then
+			label.Text = string.format("%.1fK", value / 1000)
+		else
+			label.Text = tostring(value)
+		end
+
+		if xpDingSound and (i % dingInterval == 1 or steps <= 8) then
+			xpDingSound:Play()
+		end
+
+		task.wait(stepTime)
+	end
+
+	-- Set final value
+	if finalValue >= 1000 then
+		label.Text = string.format("%.1fK", finalValue / 1000)
+	else
+		label.Text = tostring(finalValue)
+	end
+
+	-- Play achieve sound when landing on final number
+	if achieveSound then achieveSound:Play() end
+
+	-- Pulse effect at final value
+	local originalSize = label.Size
+	local pulseSize = UDim2.new(
+		originalSize.X.Scale * 1.3, originalSize.X.Offset * 1.3,
+		originalSize.Y.Scale * 1.3, originalSize.Y.Offset * 1.3
+	)
+
+	local grow = PlayTween(label, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = pulseSize,
+	})
+	grow.Completed:Wait()
+
+	PlayTween(label, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+		Size = originalSize,
+	})
+end
+
+-- Typewriter for progress bar "X/Y" format (with XPDing sound on each tick)
+local function AnimateProgressCountUp(label: TextLabel, startVal: number, endVal: number, maxVal: number)
+	if startVal == endVal then
+		label.Text = endVal .. "/" .. maxVal
+		return
+	end
+
+	local duration = 0.6
+	local diff = math.abs(endVal - startVal)
+	local steps = math.min(diff, 30)
+	if steps == 0 then steps = 1 end
+	local stepTime = duration / steps
+
+	-- Play XPDing every few steps so it's not overwhelming
+	local dingInterval = math.max(1, math.floor(steps / 8))
+
+	for i = 1, steps do
+		local value = math.floor(startVal + (i / steps) * (endVal - startVal))
+		label.Text = value .. "/" .. maxVal
+
+		if xpDingSound and (i % dingInterval == 1 or steps <= 8) then
+			xpDingSound:Play()
+		end
+
+		task.wait(stepTime)
+	end
+
+	label.Text = endVal .. "/" .. maxVal
+end
+
+-- Scale-pop animation for a label (size 0 -> original)
+local function AnimateScaleIn(label: TextLabel, originalSize: UDim2, delay_: number)
+	label.Size = UDim2.new(0, 0, 0, 0)
+	label.Visible = true
+
+	task.delay(delay_, function()
+		PlayTween(label, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			Size = originalSize,
+		})
+	end)
+end
+
+-- Scale-out animation for a label
+local function AnimateScaleOut(label: TextLabel, delay_: number)
+	task.delay(delay_, function()
+		local tween = PlayTween(label, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+			Size = UDim2.new(0, 0, 0, 0),
+		})
+		tween.Completed:Wait()
+		label.Visible = false
+	end)
+end
+
+-- Show the XP progress bar with fill animation
+local function ShowXPProgress(xpBefore: number, xpAfter: number)
+	if not isShowing then return end
+
+	local levelBefore, progressBefore, neededBefore = Constants.GetLevelInfo(xpBefore)
+	local levelAfter, progressAfter, neededAfter = Constants.GetLevelInfo(xpAfter)
+	local didLevelUp = levelAfter > levelBefore
+
+	-- Set initial state
+	local startRatio = neededBefore > 0 and math.clamp(progressBefore / neededBefore, 0, 1) or 0
+	xpFill.Size = UDim2.new(startRatio, 0, xpFillOrigSize.Y.Scale, xpFillOrigSize.Y.Offset)
+	xpProgressText.Text = progressBefore .. "/" .. neededBefore
+	xpLevelText.Text = "Lvl. " .. levelBefore
+
+	-- Hide elements for animate-in
+	xpStarImage.Size = UDim2.new(0, 0, 0, 0)
+	xpStarImage.Visible = true
+	xpLevelText.Visible = false
+	xpProgressText.Visible = false
+	xpStudBg.Visible = false
+
+	-- Position below screen
+	xpProgressFrame.Position = UDim2.new(
+		xpProgressFrameOrigPos.X.Scale,
+		xpProgressFrameOrigPos.X.Offset,
+		1.5,
+		0
+	)
+	xpProgressUI.DisplayOrder = 15 -- Above cinematic bars (DisplayOrder 10)
+	xpProgressUI.Enabled = true
+
+	-- Slide up — offset above the bottom cinematic bar (10% screen height)
+	local slideTarget = UDim2.new(
+		xpProgressFrameOrigPos.X.Scale,
+		xpProgressFrameOrigPos.X.Offset,
+		xpProgressFrameOrigPos.Y.Scale - BAR_HEIGHT - 0.02,
+		xpProgressFrameOrigPos.Y.Offset
+	)
+	local slideTween = PlayTween(xpProgressFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Position = slideTarget,
+	})
+	slideTween.Completed:Wait()
+	if not isShowing then return end
+
+	-- Animate elements in
+	PlayTween(xpStarImage, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = xpStarOrigSize,
+	})
+	task.wait(0.1)
+	xpStudBg.Visible = true
+	xpLevelText.Visible = true
+	xpProgressText.Visible = true
+	task.wait(0.15)
+	if not isShowing then return end
+
+	-- Animate progress fill and typewriter
+	if didLevelUp then
+		-- Handle multi-level-ups one level at a time
+		local curLevel = levelBefore
+		local curProgress = progressBefore
+		local curNeeded = neededBefore
+
+		while curLevel < levelAfter do
+			-- Fill bar to 100% on current level
+			PlayTween(xpFill, TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Size = UDim2.new(1, 0, xpFillOrigSize.Y.Scale, xpFillOrigSize.Y.Offset),
+			})
+			AnimateProgressCountUp(xpProgressText, curProgress, curNeeded, curNeeded)
+			task.wait(0.2)
+			if not isShowing then return end
+
+			curLevel = curLevel + 1
+
+			-- Play achieve sound on level up
+			if achieveSound then achieveSound:Play() end
+
+			-- Update level text
+			xpLevelText.Text = "Lvl. " .. curLevel
+
+			-- Pulse level text using offset-based sizing (works for both Scale and Offset labels)
+			local origLevelSize = xpLevelText.Size
+			local pulseLevelSize = UDim2.new(
+				origLevelSize.X.Scale * 1.3, origLevelSize.X.Offset * 1.3,
+				origLevelSize.Y.Scale * 1.3, origLevelSize.Y.Offset * 1.3
+			)
+			local levelGrow = PlayTween(xpLevelText, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Size = pulseLevelSize,
+			})
+			levelGrow.Completed:Wait()
+			PlayTween(xpLevelText, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				Size = origLevelSize,
+			})
+			task.wait(0.2)
+			if not isShowing then return end
+
+			-- Reset fill for next level
+			xpFill.Size = UDim2.new(0, 0, xpFillOrigSize.Y.Scale, xpFillOrigSize.Y.Offset)
+
+			-- Prep for next iteration
+			curProgress = 0
+			curNeeded = Constants.XP_PER_LEVEL_BASE + (curLevel - 1) * Constants.XP_PER_LEVEL_GROWTH
+		end
+
+		-- Final fill to actual progress on the final level
+		local newRatio = neededAfter > 0 and math.clamp(progressAfter / neededAfter, 0, 1) or 0
+		PlayTween(xpFill, TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Size = UDim2.new(newRatio, 0, xpFillOrigSize.Y.Scale, xpFillOrigSize.Y.Offset),
+		})
+		AnimateProgressCountUp(xpProgressText, 0, progressAfter, neededAfter)
+	else
+		-- Simple fill from old to new
+		local newRatio = neededAfter > 0 and math.clamp(progressAfter / neededAfter, 0, 1) or 0
+		PlayTween(xpFill, TweenInfo.new(0.8, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Size = UDim2.new(newRatio, 0, xpFillOrigSize.Y.Scale, xpFillOrigSize.Y.Offset),
+		})
+		AnimateProgressCountUp(xpProgressText, progressBefore, progressAfter, neededAfter)
+	end
+
+	-- Hold
+	task.wait(1.0)
+	if not isShowing then return end
+
+	-- Slide back down
+	local slideDownTween = PlayTween(xpProgressFrame, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+		Position = UDim2.new(xpProgressFrameOrigPos.X.Scale, xpProgressFrameOrigPos.X.Offset, 1.5, 0),
+	})
+	slideDownTween.Completed:Wait()
+	xpProgressUI.Enabled = false
+end
+
+-- Hide the XP progress bar immediately
+local function HideXPProgress()
+	xpProgressUI.Enabled = false
+	xpProgressFrame.Position = UDim2.new(
+		xpProgressFrameOrigPos.X.Scale,
+		xpProgressFrameOrigPos.X.Offset,
+		1.5,
+		0
+	)
+end
+
+-- Show the results screen
+local function ShowResults(data: any)
+	if isShowing then return end
+	isShowing = true
+
+	local cinematicGui = topBar and topBar.Parent :: ScreenGui?
+	if cinematicGui then
+		cinematicGui.Enabled = true
+	end
+
+	-- Determine if local player won (check winnerIds array for team wins)
+	local winnerId = data and data.winnerId or 0
+	local winnerIds = data and data.winnerIds or {}
+	local didWin = (winnerId == player.UserId)
+	if not didWin and #winnerIds > 0 then
+		for _, id in ipairs(winnerIds) do
+			if id == player.UserId then
+				didWin = true
+				break
+			end
+		end
+	end
+	local isDraw = (winnerId == 0)
+
+	-- Get local player's stats
+	local coins, kills, demolitions, powerups, xp, tilesOwned = FindPlayerStats(data and data.results, player.UserId)
+	local xpBefore, xpAfter = FindPlayerXPProgression(data and data.results, player.UserId)
+
+	-- Set result text and color
+	local resultStroke = resultLabel:FindFirstChildOfClass("UIStroke")
+	if isDraw then
+		resultLabel.Text = "Draw!"
+		resultLabel.TextColor3 = Color3.fromRGB(255, 215, 0) -- Gold
+		if resultStroke then resultStroke.Color = Color3.fromRGB(180, 150, 0) end
+	elseif didWin then
+		resultLabel.Text = "You Won!"
+		resultLabel.TextColor3 = Color3.fromRGB(80, 220, 100) -- Green
+		if resultStroke then resultStroke.Color = Color3.fromRGB(40, 140, 50) end
+	else
+		local winnerName = data and data.winner or "Someone"
+		resultLabel.Text = winnerName .. " Won!"
+		resultLabel.TextColor3 = Color3.fromRGB(255, 70, 100) -- Red-pink
+		if resultStroke then resultStroke.Color = Color3.fromRGB(160, 30, 50) end
+	end
+
+	-- Set stat texts (will be revealed via scale animation)
+	-- In Color Battle, show tiles claimed instead of kills
+	local isColorBattle = currentMode and currentMode.paintTiles == true
+	if isColorBattle then
+		killsLabel.Text = "Tiles Claimed: " .. tostring(tilesOwned)
+	else
+		killsLabel.Text = "Kills: " .. tostring(kills)
+	end
+	demosLabel.Text = "Demolitions: " .. tostring(demolitions)
+	powersLabel.Text = "Powerups: " .. tostring(powerups)
+
+	-- Reset reward values
+	coinsValue.Text = "0"
+	coinsValue.Visible = true
+	coinsValue.TextTransparency = 0
+	xpValue.Text = "0"
+	xpValue.Visible = true
+	xpValue.TextTransparency = 0
+
+	print("[WinnersUI] Coins:", coins, "XP:", xp, "CoinsValue exists:", coinsValue ~= nil, "XpValue exists:", xpValue ~= nil)
+
+	-- Capsule: hidden unless earned (not implemented yet, always hidden)
+	capsuleImage.Visible = false
+	capsuleValue.Visible = false
+
+	-- === Phase 1: Cinematic bars slide in ===
+	PlayTween(topBar, TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+		Position = UDim2.new(0, 0, 0, 0),
+	})
+	PlayTween(bottomBar, TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+		Position = UDim2.new(0, 0, 1 - BAR_HEIGHT, 0),
+	})
+
+	-- === Phase 2: ParentFrame slides in from top with ResultLabel visible ===
 	task.delay(0.3, function()
-		screenGui.Enabled = false
+		resultsUI.Enabled = true
+		parentFrame.Visible = true
+
+		-- Start above screen
+		parentFrame.Position = UDim2.new(
+			parentFrameOriginalPosition.X.Scale,
+			parentFrameOriginalPosition.X.Offset,
+			-0.5,
+			0
+		)
+
+		-- Show result label immediately (it rides in with the frame)
+		resultLabel.Visible = true
+
+		-- Hide stats until their turn
+		killsLabel.Visible = false
+		demosLabel.Visible = false
+		powersLabel.Visible = false
+		rewardFrame.Visible = false
+
+		-- Slide parentFrame to original position
+		local slideTween = PlayTween(parentFrame, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			Position = parentFrameOriginalPosition,
+		})
+		slideTween.Completed:Wait()
+
+		-- === Phase 3: Stat labels scale in one by one ===
+		AnimateScaleIn(killsLabel, killsOriginalSize, 0.0)
+		AnimateScaleIn(demosLabel, demosOriginalSize, 0.15)
+		AnimateScaleIn(powersLabel, powersOriginalSize, 0.3)
+
+		-- === Phase 4: Reward frame animates in last ===
+		task.delay(0.55, function()
+			rewardFrame.Visible = true
+			coinsImage.Visible = true
+			coinsValue.Visible = true
+			xpImage.Visible = true
+			xpValue.Visible = true
+
+			-- Scale reward frame in (use stored original size since HideResults zeroes it)
+			rewardFrame.Size = UDim2.new(0, 0, 0, 0)
+			local rewardTween = PlayTween(rewardFrame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Size = rewardFrameOriginalSize,
+			})
+			rewardTween.Completed:Wait()
+
+			-- === Phase 5: Coins + XP count-up in parallel ===
+			task.spawn(AnimateCountUp, coinsValue, coins)
+			task.spawn(AnimateCountUp, xpValue, xp)
+
+			-- Wait for count-ups to finish (~1.1s), then show XP progress bar
+			task.wait(1.2)
+			task.spawn(ShowXPProgress, xpBefore, xpAfter)
+		end)
+	end)
+
+end
+
+-- Hide the results screen
+local function HideResults()
+	if not isShowing then return end
+
+	-- === Animate stat labels out ===
+	AnimateScaleOut(killsLabel, 0.0)
+	AnimateScaleOut(demosLabel, 0.05)
+	AnimateScaleOut(powersLabel, 0.1)
+
+	-- Scale reward frame out
+	task.delay(0.1, function()
+		PlayTween(rewardFrame, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+			Size = UDim2.new(0, 0, 0, 0),
+		})
+	end)
+
+	-- Slide parent frame up and out
+	task.delay(0.2, function()
+		PlayTween(parentFrame, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+			Position = UDim2.new(
+				parentFrameOriginalPosition.X.Scale,
+				parentFrameOriginalPosition.X.Offset,
+				-0.5,
+				0
+			),
+		})
+	end)
+
+	-- Slide cinematic bars out
+	PlayTween(topBar, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+		Position = UDim2.new(0, 0, -BAR_HEIGHT, 0),
+	})
+	PlayTween(bottomBar, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+		Position = UDim2.new(0, 0, 1, 0),
+	})
+
+	-- Hide XP progress bar
+	HideXPProgress()
+
+	task.delay(0.6, function()
+		resultsUI.Enabled = false
+		parentFrame.Visible = false
+		resultLabel.Visible = false
+		killsLabel.Visible = false
+		demosLabel.Visible = false
+		powersLabel.Visible = false
+		rewardFrame.Visible = false
+		capsuleImage.Visible = false
+		capsuleValue.Visible = false
+		xpImage.Visible = false
+		xpValue.Visible = false
+
+		local cinematicGui = topBar and topBar.Parent :: ScreenGui?
+		if cinematicGui then
+			cinematicGui.Enabled = false
+		end
+
+		isShowing = false
+	end)
+end
+
+-- Show full-screen black fade (used during "Preparing" to hide respawn/teleport)
+local function ShowPreparingFade()
+	if not fadeOverlay then return end
+	local cinematicGui = fadeOverlay.Parent :: ScreenGui?
+	if cinematicGui then
+		cinematicGui.Enabled = true
+	end
+	PlayTween(fadeOverlay, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		BackgroundTransparency = 0,
+	})
+end
+
+-- Fade out the black overlay (called when countdown cinematic is ready)
+local function HidePreparingFade()
+	if not fadeOverlay then return end
+	PlayTween(fadeOverlay, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+		BackgroundTransparency = 1,
+	})
+end
+
+-- Show cinematic bars for countdown
+local countdownBarsShown = false
+
+local function ShowCountdownBars()
+	if countdownBarsShown then return end
+	countdownBarsShown = true
+
+	local cinematicGui = topBar and topBar.Parent :: ScreenGui?
+	if cinematicGui then
+		cinematicGui.Enabled = true
+	end
+
+	PlayTween(topBar, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+		Position = UDim2.new(0, 0, 0, 0),
+	})
+	PlayTween(bottomBar, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+		Position = UDim2.new(0, 0, 1 - BAR_HEIGHT, 0),
+	})
+end
+
+local function HideCountdownBars()
+	if not countdownBarsShown then return end
+	countdownBarsShown = false
+
+	PlayTween(topBar, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+		Position = UDim2.new(0, 0, -BAR_HEIGHT, 0),
+	})
+	PlayTween(bottomBar, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+		Position = UDim2.new(0, 0, 1, 0),
+	})
+
+	task.delay(0.35, function()
+		if not countdownBarsShown and not isShowing then
+			local cinematicGui = topBar and topBar.Parent :: ScreenGui?
+			if cinematicGui then
+				cinematicGui.Enabled = false
+			end
+		end
 	end)
 end
 
 -- Handle state changes
 RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
-	if state == "RoundResults" or state == Constants.STATES.ROUND_END or state == "RoundEnd" then
-		Show()
+	-- Track current mode from state data
+	if data and type(data) == "table" and data.mode then
+		currentMode = data.mode
+	end
+
+	if state == "Preparing" then
+		ShowPreparingFade()
+	elseif state == "RoundResults" then
+		ShowResults(data)
+	elseif state == "FadeToLobby" then
+		HideResults()
 	elseif state == Constants.STATES.INTERMISSION or state == "Intermission" then
-		Hide()
+		HideResults()
 	elseif state == Constants.STATES.LOBBY or state == "Lobby" then
-		Hide()
+		HideResults()
+	elseif state == Constants.STATES.COUNTDOWN then
+		ShowCountdownBars()
+		HidePreparingFade()
 	elseif state == Constants.STATES.PLAYING or state == "Playing" then
-		Hide()
+		HideCountdownBars()
+		HideResults()
 	end
 end)
 
--- Handle sticker display from other players
+-- Handle sticker display
 task.spawn(function()
 	while not ShowSticker do
 		task.wait(0.1)
@@ -274,5 +811,6 @@ task.spawn(function()
 end)
 
 -- Initialize
-CreateUI()
-print("[WinnersUI] Initialized")
+InitializeUI()
+CreateCinematicUI()
+print("[WinnersUI] Results UI initialized")

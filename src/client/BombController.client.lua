@@ -14,6 +14,7 @@ local player = Players.LocalPlayer
 -- Wait for shared modules
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Constants = require(Shared:WaitForChild("Constants"))
+local BombSkins = require(Shared:WaitForChild("BombSkins"))
 
 -- Wait for remotes
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -109,15 +110,9 @@ local function CameraShake(intensity: number, duration: number)
 	end)
 end
 
--- Watch for bomb explosions
+-- Watch for bombs being added (server handles placement sound)
 local function OnBombAdded(bomb: Instance)
 	if not bomb:IsA("Model") then return end
-
-	-- Play place sound
-	local sphere = bomb:FindFirstChild("Sphere") :: BasePart?
-	if sphere then
-		PlaySoundAt("PlaceBomb", sphere.Position)
-	end
 end
 
 -- Watch for explosions (explosion parts)
@@ -183,16 +178,16 @@ local function PlayDeathFade()
 	end)
 end
 
--- Play charred death VFX on a character
+-- Play ragdoll crumble death VFX on a character
 local function PlayDeathVFX(character: Model)
 	local hrp = character:FindFirstChild("HumanoidRootPart")
 	if not hrp then return end
 
-	-- Blackout highlight (charred silhouette)
+	-- Dark charred highlight while crumbling
 	local highlight = Instance.new("Highlight")
-	highlight.FillColor = Color3.fromRGB(15, 15, 15)
+	highlight.FillColor = Color3.fromRGB(20, 20, 20)
 	highlight.FillTransparency = 0
-	highlight.OutlineColor = Color3.fromRGB(40, 40, 40)
+	highlight.OutlineColor = Color3.fromRGB(50, 50, 50)
 	highlight.OutlineTransparency = 0.3
 	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 	highlight.Parent = character
@@ -204,108 +199,131 @@ local function PlayDeathVFX(character: Model)
 		end
 	end
 
-	-- Ash emitter anchored at death position
-	local ashPart = Instance.new("Part")
-	ashPart.Size = Vector3.new(1, 1, 1)
-	ashPart.Position = hrp.Position
-	ashPart.Anchored = true
-	ashPart.CanCollide = false
-	ashPart.Transparency = 1
-	ashPart.Parent = Workspace
+	-- Collect all visible body parts to shrink (skip HumanoidRootPart)
+	local bodyParts: {BasePart} = {}
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			table.insert(bodyParts, part)
+		end
+	end
 
-	-- Rising ash/ember particles
-	local ash = Instance.new("ParticleEmitter")
-	ash.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(60, 60, 60)),
-		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(40, 40, 40)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 20)),
-	})
-	ash.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.3),
-		NumberSequenceKeypoint.new(0.3, 0.8),
-		NumberSequenceKeypoint.new(1, 0.1),
-	})
-	ash.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.2),
-		NumberSequenceKeypoint.new(0.6, 0.5),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	ash.Lifetime = NumberRange.new(1, 2)
-	ash.Rate = 0
-	ash.Speed = NumberRange.new(2, 6)
-	ash.SpreadAngle = Vector2.new(40, 40)
-	ash.EmissionDirection = Enum.NormalId.Top
-	ash.Rotation = NumberRange.new(0, 360)
-	ash.RotSpeed = NumberRange.new(-60, 60)
-	ash.Parent = ashPart
-	ash:Emit(25)
+	-- Shrink body parts with staggered timing for cascading crumble
+	for _, part in ipairs(bodyParts) do
+		local delay_ = 0.15 + math.random() * 0.4 -- 0.15s to 0.55s stagger
+		task.delay(delay_, function()
+			if not part or not part.Parent then return end
 
-	-- Smoke puff
-	local smoke = Instance.new("ParticleEmitter")
-	smoke.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(80, 80, 80)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 30, 30)),
-	})
-	smoke.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.5, 3),
-		NumberSequenceKeypoint.new(1, 4),
-	})
-	smoke.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.3),
-		NumberSequenceKeypoint.new(0.4, 0.6),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	smoke.Lifetime = NumberRange.new(0.6, 1.2)
-	smoke.Rate = 0
-	smoke.Speed = NumberRange.new(3, 8)
-	smoke.SpreadAngle = Vector2.new(180, 180)
-	smoke.Parent = ashPart
-	smoke:Emit(15)
+			local tweenInfo = TweenInfo.new(
+				0.3 + math.random() * 0.25, -- 0.3-0.55s shrink duration
+				Enum.EasingStyle.Back,
+				Enum.EasingDirection.In
+			)
 
-	-- Embers
-	local embers = Instance.new("ParticleEmitter")
-	embers.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 140, 40)),
-		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 80, 20)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 40, 10)),
-	})
-	embers.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.15),
-		NumberSequenceKeypoint.new(1, 0),
-	})
-	embers.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(0.7, 0.3),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	embers.Lifetime = NumberRange.new(0.4, 1)
-	embers.Rate = 0
-	embers.Speed = NumberRange.new(4, 12)
-	embers.SpreadAngle = Vector2.new(120, 120)
-	embers.EmissionDirection = Enum.NormalId.Top
-	embers.LightEmission = 1
-	embers.LightInfluence = 0
-	embers.Parent = ashPart
-	embers:Emit(20)
+			TweenService:Create(part, tweenInfo, {
+				Size = part.Size * 0.02,
+				Transparency = 0.9,
+			}):Play()
+		end)
+	end
 
-	-- Fade highlight
-	task.delay(1, function()
+	-- Fade highlight as parts crumble away
+	task.delay(0.4, function()
 		if highlight and highlight.Parent then
-			TweenService:Create(highlight, TweenInfo.new(0.5), {
-				FillTransparency = 0.5,
-				OutlineTransparency = 0.8,
+			TweenService:Create(highlight, TweenInfo.new(0.6), {
+				FillTransparency = 1,
+				OutlineTransparency = 1,
 			}):Play()
 		end
 	end)
 
-	-- Cleanup
+	-- Dust/crumble particles at death position
+	local dustPart = Instance.new("Part")
+	dustPart.Size = Vector3.new(1, 1, 1)
+	dustPart.Position = hrp.Position
+	dustPart.Anchored = true
+	dustPart.CanCollide = false
+	dustPart.Transparency = 1
+	dustPart.Parent = Workspace
+
+	-- Dust cloud
+	local dust = Instance.new("ParticleEmitter")
+	dust.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(180, 170, 150)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 95, 85)),
+	})
+	dust.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.4),
+		NumberSequenceKeypoint.new(0.5, 1.5),
+		NumberSequenceKeypoint.new(1, 0.3),
+	})
+	dust.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.3),
+		NumberSequenceKeypoint.new(0.5, 0.6),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	dust.Lifetime = NumberRange.new(0.6, 1.2)
+	dust.Rate = 0
+	dust.Speed = NumberRange.new(2, 6)
+	dust.SpreadAngle = Vector2.new(120, 120)
+	dust.EmissionDirection = Enum.NormalId.Top
+	dust.Rotation = NumberRange.new(0, 360)
+	dust.RotSpeed = NumberRange.new(-40, 40)
+	dust.Parent = dustPart
+	dust:Emit(18)
+
+	-- Small debris chunks that fall
+	local debris = Instance.new("ParticleEmitter")
+	debris.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(60, 55, 50)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 28, 25)),
+	})
+	debris.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.25),
+		NumberSequenceKeypoint.new(1, 0.05),
+	})
+	debris.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.8, 0.3),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	debris.Lifetime = NumberRange.new(0.4, 0.8)
+	debris.Rate = 0
+	debris.Speed = NumberRange.new(5, 12)
+	debris.SpreadAngle = Vector2.new(60, 60)
+	debris.EmissionDirection = Enum.NormalId.Top
+	debris.Acceleration = Vector3.new(0, -30, 0) -- Gravity pull on debris
+	debris.Parent = dustPart
+	debris:Emit(25)
+
+	-- Faint embers from the explosion
+	local embers = Instance.new("ParticleEmitter")
+	embers.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 140, 40)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 40, 10)),
+	})
+	embers.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.12),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	embers.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.7, 0.4),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	embers.Lifetime = NumberRange.new(0.3, 0.7)
+	embers.Rate = 0
+	embers.Speed = NumberRange.new(3, 8)
+	embers.SpreadAngle = Vector2.new(90, 90)
+	embers.EmissionDirection = Enum.NormalId.Top
+	embers.LightEmission = 1
+	embers.LightInfluence = 0
+	embers.Parent = dustPart
+	embers:Emit(12)
+
+	-- Clean up particle anchor after effects finish
 	task.delay(2.5, function()
-		if ashPart and ashPart.Parent then
-			ashPart:Destroy()
-		end
-		if highlight and highlight.Parent then
-			highlight:Destroy()
+		if dustPart and dustPart.Parent then
+			dustPart:Destroy()
 		end
 	end)
 end
@@ -382,6 +400,118 @@ end)
 -- Monitor for bombs being added
 CollectionService:GetInstanceAddedSignal("Bomb"):Connect(OnBombAdded)
 
+-- Swap BOMB_UP powerup model to show the local player's equipped skin
+local SyncInventory = Remotes:WaitForChild("SyncInventory", 10)
+local equippedSkinId = "default_bomb"
+
+-- Forward-declare so it can be referenced in the SyncInventory callback below
+local SwapBombUpModel
+
+-- Track equipped skin from inventory syncs
+if not SyncInventory then
+	warn("[BombController] SyncInventory remote not found")
+end
+
+if SyncInventory then
+	SyncInventory.OnClientEvent:Connect(function(inv)
+		if inv and inv.equippedSkin and inv.equippedSkin ~= "" then
+			local oldSkin = equippedSkinId
+			equippedSkinId = inv.equippedSkin
+
+			-- If the skin just changed (e.g. first sync or player equipped a new skin),
+			-- re-swap any existing BOMB_UP powerups in the arena
+			if oldSkin ~= equippedSkinId and SwapBombUpModel then
+				for _, instance in ipairs(CollectionService:GetTagged("PowerUp")) do
+					if instance.Name == "PowerUp_BOMB_UP" and instance.Parent then
+						SwapBombUpModel(instance)
+					end
+				end
+			end
+		end
+	end)
+end
+
+-- Replace a BOMB_UP powerup model with the player's equipped skin visually
+SwapBombUpModel = function(powerUp: Instance)
+	-- Skip swap if using default skin or no skin equipped
+	if equippedSkinId == "default_bomb" or equippedSkinId == "" then return end
+
+	local skinData = BombSkins.GetSkinById(equippedSkinId)
+	if not skinData then return end
+
+	-- If the skin uses the same model as Default Bomb, no visual swap needed
+	if skinData.modelName == "Default Bomb" then return end
+
+	local skinModel = BombSkins.GetSkinModel(skinData)
+	if not skinModel then return end
+
+	-- Check if this powerup was already swapped (avoid double-swapping)
+	if powerUp:GetAttribute("SkinSwapped") then return end
+	powerUp:SetAttribute("SkinSwapped", true)
+
+	local clone = skinModel:Clone()
+
+	-- Get the existing PrimaryPart (server animates this)
+	local existingPrimary = powerUp:IsA("Model") and (powerUp.PrimaryPart or powerUp:FindFirstChildWhichIsA("BasePart")) or nil
+	if not existingPrimary then
+		clone:Destroy()
+		return
+	end
+
+	-- Hide all existing parts (don't destroy -- server still animates PrimaryPart)
+	for _, child in ipairs(powerUp:GetDescendants()) do
+		if child:IsA("BasePart") then
+			child.Transparency = 1
+		elseif child:IsA("ParticleEmitter") then
+			child.Enabled = false
+		elseif child:IsA("Light") then
+			child.Enabled = false
+		end
+	end
+
+	-- Position the clone at the existing primary's location
+	if clone:IsA("Model") then
+		local clonePrimary = clone.PrimaryPart or clone:FindFirstChildWhichIsA("BasePart")
+		if clonePrimary then
+			clone:SetPrimaryPartCFrame(existingPrimary.CFrame)
+		end
+
+		-- Weld all skin parts to the existing PrimaryPart so they follow the server animation
+		for _, part in ipairs(clone:GetDescendants()) do
+			if part:IsA("BasePart") then
+				local offset = existingPrimary.CFrame:ToObjectSpace(part.CFrame)
+				part.Anchored = false
+				part.CanCollide = false
+				part.Massless = true
+
+				local weld = Instance.new("Weld")
+				weld.Part0 = existingPrimary
+				weld.Part1 = part
+				weld.C0 = offset
+				weld.Parent = part
+
+				part.Parent = powerUp
+			end
+		end
+	end
+
+	clone:Destroy()
+end
+
+-- Watch for BOMB_UP powerups spawning
+CollectionService:GetInstanceAddedSignal("PowerUp"):Connect(function(instance)
+	if instance.Name == "PowerUp_BOMB_UP" then
+		SwapBombUpModel(instance)
+	end
+end)
+
+-- Also swap any existing BOMB_UP powerups
+for _, instance in ipairs(CollectionService:GetTagged("PowerUp")) do
+	if instance.Name == "PowerUp_BOMB_UP" then
+		SwapBombUpModel(instance)
+	end
+end
+
 -- Monitor for explosions
 local arenaFolder = Workspace:WaitForChild("Arena", 10)
 if arenaFolder then
@@ -399,8 +529,70 @@ Workspace.DescendantAdded:Connect(function(descendant)
 	end
 end)
 
+-- Handle explosion VFX particle emission (server :Emit() doesn't replicate)
+local function OnExplosionVFX(vfx: Instance)
+	-- Emit all particle emitters client-side
+	for _, emitter in ipairs(vfx:GetDescendants()) do
+		if emitter:IsA("ParticleEmitter") then
+			if emitter.Rate > 0 then
+				emitter.Enabled = true
+			end
+			local burst = emitter:GetAttribute("EmitCount") or 20
+			emitter:Emit(burst)
+		end
+	end
+
+	-- Also trigger sound + camera shake
+	if vfx:IsA("BasePart") then
+		OnExplosionAdded(vfx)
+	elseif vfx:IsA("Model") and vfx.PrimaryPart then
+		OnExplosionAdded(vfx.PrimaryPart)
+	end
+
+	-- Disable emitters after burst
+	task.delay(0.5, function()
+		if vfx and vfx.Parent then
+			for _, emitter in ipairs(vfx:GetDescendants()) do
+				if emitter:IsA("ParticleEmitter") then
+					emitter.Enabled = false
+				end
+			end
+		end
+	end)
+end
+
+CollectionService:GetInstanceAddedSignal("ExplosionVFX"):Connect(OnExplosionVFX)
+for _, vfx in ipairs(CollectionService:GetTagged("ExplosionVFX")) do
+	OnExplosionVFX(vfx)
+end
+
 -- Initialize
 InitializeSounds()
+
+-- Preload all assets so first rounds don't have delays
+task.spawn(function()
+	local ContentProvider = game:GetService("ContentProvider")
+	local assetsToPreload = {}
+
+	local assetsFolder = ReplicatedStorage:FindFirstChild("Assets")
+	if assetsFolder then
+		for _, descendant in ipairs(assetsFolder:GetDescendants()) do
+			if descendant:IsA("Sound") or descendant:IsA("Animation") or descendant:IsA("Decal")
+				or descendant:IsA("Texture") or descendant:IsA("ParticleEmitter")
+				or descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
+				table.insert(assetsToPreload, descendant)
+			end
+		end
+	end
+
+	if #assetsToPreload > 0 then
+		pcall(function()
+			ContentProvider:PreloadAsync(assetsToPreload)
+		end)
+		print("[BombController] Preloaded " .. #assetsToPreload .. " assets")
+	end
+end)
+
 -- Handle round end fade to lobby transition
 RoundStateChanged.OnClientEvent:Connect(function(eventType: string, data: any?)
 	if eventType == "FadeToLobby" then

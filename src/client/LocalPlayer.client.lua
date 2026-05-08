@@ -8,6 +8,8 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local ContextActionService = game:GetService("ContextActionService")
 
+local SoundService = game:GetService("SoundService")
+
 local player = Players.LocalPlayer
 
 -- Wait for shared modules
@@ -48,6 +50,25 @@ end
 
 -- Initialize grid on load
 InitializeGridFromCanvas()
+
+-- Client-side bomb drop sound for instant feedback
+local dropSound: Sound? = nil
+do
+	local SoundsFolder = ReplicatedStorage:FindFirstChild("Sounds")
+	local VFXFolder = SoundsFolder and SoundsFolder:FindFirstChild("VFX")
+	local DropTemplate = VFXFolder and VFXFolder:FindFirstChild("Drop")
+	if DropTemplate then
+		dropSound = DropTemplate:Clone()
+		dropSound.Parent = SoundService
+	end
+end
+
+local function PlayDropSound()
+	if dropSound then
+		dropSound.TimePosition = 0.1 -- Skip initial silence in the audio
+		dropSound:Play()
+	end
+end
 
 -- Current game state
 local currentGameState = Constants.STATES.LOBBY
@@ -177,6 +198,7 @@ local function OnInputBegan(input: InputObject, gameProcessed: boolean)
 	-- Bomb placement - only during gameplay
 	if IsKeyForInput(keyCode, "bomb") then
 		if currentGameState == Constants.STATES.PLAYING then
+			PlayDropSound()
 			PlaceBomb:FireServer()
 		end
 	end
@@ -184,6 +206,7 @@ local function OnInputBegan(input: InputObject, gameProcessed: boolean)
 	-- Gamepad
 	if input.KeyCode == Enum.KeyCode.ButtonB then
 		if currentGameState == Constants.STATES.PLAYING then
+			PlayDropSound()
 			PlaceBomb:FireServer()
 		end
 	end
@@ -240,13 +263,6 @@ local function CalculateMoveDirection(): Vector3
 	return dir
 end
 
--- Check if using custom character (has AnimSaves)
-local function IsCustomCharacter(): boolean
-	local character = player.Character
-	if not character then return false end
-	return character:FindFirstChild("AnimSaves") ~= nil
-end
-
 -- Update loop
 local function OnUpdate(deltaTime: number)
 	local character = player.Character
@@ -258,64 +274,34 @@ local function OnUpdate(deltaTime: number)
 	if not humanoid or not hrp then return end
 	if not localPlayerData.isAlive then return end
 
+	-- Only control movement during active round states
+	if currentGameState ~= Constants.STATES.PLAYING and currentGameState ~= Constants.STATES.COUNTDOWN and currentGameState ~= Constants.STATES.ROUND_END then
+		return
+	end
+
+	-- Freeze movement during countdown and round end cinematic
+	if currentGameState == Constants.STATES.COUNTDOWN or currentGameState == Constants.STATES.ROUND_END then
+		humanoid.WalkSpeed = 0
+		local currentVel = hrp.AssemblyLinearVelocity
+		hrp.AssemblyLinearVelocity = Vector3.new(0, currentVel.Y, 0)
+		return
+	end
+
 	-- Calculate movement
 	moveDirection = CalculateMoveDirection()
 
 	-- Apply movement speed
 	humanoid.WalkSpeed = localPlayerData.speed
 
-	-- Check if custom character needs rotation offset
-	local isCustom = IsCustomCharacter()
+	-- Let Roblox handle rotation
+	humanoid.AutoRotate = true
 
-	if isCustom then
-		-- Custom character: disable auto-rotate and manually set rotation with offset
-		humanoid.AutoRotate = false
-
-		if moveDirection.Magnitude > 0 then
-			-- Calculate target rotation from movement direction
-			local targetAngle = math.atan2(-moveDirection.X, -moveDirection.Z)
-			local currentCFrame = hrp.CFrame
-			local targetCFrame = CFrame.new(currentCFrame.Position) * CFrame.Angles(0, targetAngle, 0)
-
-			-- Instant rotation for responsive feel
-			hrp.CFrame = targetCFrame
-		end
-	else
-		-- Default character: let Roblox handle rotation
-		humanoid.AutoRotate = true
-	end
-
-	-- Smooth velocity-based movement (only affects horizontal, preserves gravity)
-	local speed = localPlayerData.speed
-	local currentVel = hrp.AssemblyLinearVelocity
-	local currentHorizontal = Vector3.new(currentVel.X, 0, currentVel.Z)
-
-	if moveDirection.Magnitude > 0 then
-		local targetVelocity = moveDirection * speed
-		-- Instant start, keep vertical velocity for gravity
-		hrp.AssemblyLinearVelocity = Vector3.new(targetVelocity.X, currentVel.Y, targetVelocity.Z)
-	else
-		-- Smooth deceleration when stopping
-		local smoothedVelocity = currentHorizontal:Lerp(Vector3.zero, 0.15)
-		hrp.AssemblyLinearVelocity = Vector3.new(smoothedVelocity.X, currentVel.Y, smoothedVelocity.Z)
-	end
+	-- Use Humanoid:Move() so the engine handles collision properly
+	humanoid:Move(moveDirection)
 
 	-- Update bomb placement indicator
 	UpdatePlacementIndicator()
 end
-
--- Handle server data sync
-SyncPlayerData.OnClientEvent:Connect(function(data)
-	if data then
-		localPlayerData.bombCount = data.bombCount or Constants.MAX_BOMBS_DEFAULT
-		localPlayerData.bombRange = data.bombRange or Constants.BOMB_DEFAULT_RANGE
-		localPlayerData.speed = data.speed or Constants.MOVE_SPEED
-		localPlayerData.lives = data.lives or Constants.PLAYER_LIVES_DEFAULT
-		localPlayerData.coins = data.coins or 0
-		localPlayerData.isAlive = data.isAlive ~= false
-		localPlayerData.activeBombs = data.activeBombs or 0
-	end
-end)
 
 -- Create shared data folder for other scripts to read player data
 local PlayerDataFolder = Instance.new("Folder")
@@ -341,19 +327,6 @@ local function StoreValue(name: string, value: any)
 	end
 end
 
--- Update stored values on sync
-SyncPlayerData.OnClientEvent:Connect(function(data)
-	if data then
-		StoreValue("BombCount", data.bombCount or 1)
-		StoreValue("BombRange", data.bombRange or 2)
-		StoreValue("Speed", data.speed or 12)
-		StoreValue("Lives", data.lives or 1)
-		StoreValue("Coins", data.coins or 0)
-		StoreValue("IsAlive", data.isAlive ~= false)
-		StoreValue("ActiveBombs", data.activeBombs or 0)
-	end
-end)
-
 -- Initial values
 StoreValue("BombCount", localPlayerData.bombCount)
 StoreValue("BombRange", localPlayerData.bombRange)
@@ -362,59 +335,6 @@ StoreValue("Lives", localPlayerData.lives)
 StoreValue("Coins", localPlayerData.coins)
 StoreValue("IsAlive", localPlayerData.isAlive)
 StoreValue("ActiveBombs", localPlayerData.activeBombs)
-
--- Disable/enable jumping based on game state
-local function SetJumpEnabled(enabled: boolean)
-	local character = player.Character
-	if not character then return end
-
-	local humanoid = character:FindFirstChild("Humanoid") :: Humanoid?
-	if humanoid then
-		if enabled then
-			humanoid.JumpPower = 50 -- Default jump power
-			humanoid.JumpHeight = 7.2 -- Default jump height
-		else
-			humanoid.JumpPower = 0
-			humanoid.JumpHeight = 0
-		end
-	end
-end
-
--- Listen for game state changes
-RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
-	if type(state) == "string" and Constants.STATES[state:upper()] then
-		currentGameState = state
-	elseif state == Constants.STATES.LOBBY or state == Constants.STATES.CHARACTER_SELECT
-		or state == Constants.STATES.COUNTDOWN or state == Constants.STATES.PLAYING
-		or state == Constants.STATES.ROUND_END or state == Constants.STATES.INTERMISSION then
-		currentGameState = state
-	end
-
-	-- Disable jumping during gameplay states
-	if currentGameState == Constants.STATES.PLAYING or currentGameState == Constants.STATES.COUNTDOWN then
-		SetJumpEnabled(false)
-	else
-		SetJumpEnabled(true)
-	end
-
-	-- Hide placement indicator when not playing
-	if currentGameState ~= Constants.STATES.PLAYING and placementIndicator then
-		placementIndicator.Parent = nil
-	end
-end)
-
--- Also disable jump when character spawns during gameplay
-player.CharacterAdded:Connect(function(character)
-	task.wait(0.1) -- Wait for humanoid
-	if currentGameState == Constants.STATES.PLAYING or currentGameState == Constants.STATES.COUNTDOWN then
-		SetJumpEnabled(false)
-	end
-end)
-
--- Connect events
-UserInputService.InputBegan:Connect(OnInputBegan)
-UserInputService.InputEnded:Connect(OnInputEnded)
-RunService:BindToRenderStep("PlayerMovement", Enum.RenderPriority.Input.Value, OnUpdate)
 
 -- Danger tiles visibility management
 -- Hide danger tiles for players not in the game (dead/spectating)
@@ -437,24 +357,92 @@ local function UpdateDangerTilesVisibility()
 	end
 end
 
--- Update danger tile visibility when player state changes
+-- Handle server data sync (single handler for both local state and shared data store)
 SyncPlayerData.OnClientEvent:Connect(function(data)
 	if data then
-		-- Update visibility after isAlive status change
+		-- Update local player data
+		localPlayerData.bombCount = data.bombCount or Constants.MAX_BOMBS_DEFAULT
+		localPlayerData.bombRange = data.bombRange or Constants.BOMB_DEFAULT_RANGE
+		localPlayerData.speed = data.speed or Constants.MOVE_SPEED
+		localPlayerData.lives = data.lives or Constants.PLAYER_LIVES_DEFAULT
+		localPlayerData.coins = data.coins or 0
+		localPlayerData.isAlive = data.isAlive ~= false
+		localPlayerData.activeBombs = data.activeBombs or 0
+
+		-- Update shared data store for other scripts
+		StoreValue("BombCount", data.bombCount or 1)
+		StoreValue("BombRange", data.bombRange or 2)
+		StoreValue("Speed", data.speed or 12)
+		StoreValue("Lives", data.lives or 1)
+		StoreValue("Coins", data.coins or 0)
+		StoreValue("IsAlive", data.isAlive ~= false)
+		StoreValue("ActiveBombs", data.activeBombs or 0)
+
+		-- Update danger tiles visibility after isAlive status change
 		task.defer(UpdateDangerTilesVisibility)
 	end
 end)
 
--- Update when game state changes
+-- Disable/enable jumping based on game state
+local function SetJumpEnabled(enabled: boolean)
+	local character = player.Character
+	if not character then return end
+
+	local humanoid = character:FindFirstChild("Humanoid") :: Humanoid?
+	if humanoid then
+		if enabled then
+			humanoid.JumpPower = 50 -- Default jump power
+			humanoid.JumpHeight = 7.2 -- Default jump height
+		else
+			humanoid.JumpPower = 0
+			humanoid.JumpHeight = 0
+		end
+	end
+end
+
+-- Listen for game state changes (single handler — FIX #7b: trust server state, FIX #13: merged)
 RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
+	if type(state) == "string" then
+		currentGameState = state
+	end
+
+	-- Disable jumping during gameplay states
+	if currentGameState == Constants.STATES.PLAYING or currentGameState == Constants.STATES.COUNTDOWN then
+		SetJumpEnabled(false)
+	else
+		SetJumpEnabled(true)
+	end
+
+	-- Hide placement indicator when not playing
+	if currentGameState ~= Constants.STATES.PLAYING and placementIndicator then
+		placementIndicator.Parent = nil
+	end
+
+	-- Update danger tiles visibility when game state changes
 	task.defer(UpdateDangerTilesVisibility)
 end)
 
+-- Also disable jump when character spawns during gameplay
+player.CharacterAdded:Connect(function(character)
+	task.wait(0.1) -- Wait for humanoid
+	if currentGameState == Constants.STATES.PLAYING or currentGameState == Constants.STATES.COUNTDOWN then
+		SetJumpEnabled(false)
+	end
+end)
+
+-- Connect events
+UserInputService.InputBegan:Connect(OnInputBegan)
+UserInputService.InputEnded:Connect(OnInputEnded)
+RunService:BindToRenderStep("PlayerMovement", Enum.RenderPriority.Input.Value, OnUpdate)
+
 -- Continuously check for new danger tiles (they're created dynamically)
+-- Only does work during PLAYING/COUNTDOWN states to avoid wasted effort
 task.spawn(function()
 	while true do
-		UpdateDangerTilesVisibility()
-		task.wait(0.2)
+		if currentGameState == Constants.STATES.PLAYING or currentGameState == Constants.STATES.COUNTDOWN then
+			UpdateDangerTilesVisibility()
+		end
+		task.wait(0.5)
 	end
 end)
 

@@ -12,6 +12,7 @@ local MapData = {}
 -- true = walkable, false = blocked
 MapData.walkabilityGrid = {} :: {{boolean}}
 MapData.bombGrid = {} :: {{boolean}} -- true = bomb present
+MapData.tileOwnerGrid = {} :: {{number}} -- 0 = unclaimed, userId = claimed by that player
 
 -- Dynamic grid origin and rotation (set by MapGenerator based on Canvas CFrame)
 MapData.gridOrigin = Vector3.new(-50, 1, -50)
@@ -34,15 +35,18 @@ function MapData.InitializeGrids()
 	MapData.walkabilityGrid = {}
 	MapData.bombGrid = {}
 	MapData.hardWallGrid = {}
+	MapData.tileOwnerGrid = {}
 
 	for x = 1, Constants.GRID_WIDTH do
 		MapData.walkabilityGrid[x] = {}
 		MapData.bombGrid[x] = {}
 		MapData.hardWallGrid[x] = {}
+		MapData.tileOwnerGrid[x] = {}
 		for y = 1, Constants.GRID_HEIGHT do
 			MapData.walkabilityGrid[x][y] = true
 			MapData.bombGrid[x][y] = false
 			MapData.hardWallGrid[x][y] = false
+			MapData.tileOwnerGrid[x][y] = 0
 		end
 	end
 end
@@ -294,6 +298,40 @@ function MapData.FloodFillReachable(startX: number, startY: number): {{x: number
 	end
 
 	return reachable
+end
+
+-- Set tile owner (for Color Battle mode)
+function MapData.SetTileOwner(gridX: number, gridY: number, ownerId: number)
+	if gridX < 1 or gridX > Constants.GRID_WIDTH then return end
+	if gridY < 1 or gridY > Constants.GRID_HEIGHT then return end
+	if MapData.tileOwnerGrid[gridX] then
+		MapData.tileOwnerGrid[gridX][gridY] = ownerId
+	end
+end
+
+-- Get tile owner
+function MapData.GetTileOwner(gridX: number, gridY: number): number
+	if gridX < 1 or gridX > Constants.GRID_WIDTH then return 0 end
+	if gridY < 1 or gridY > Constants.GRID_HEIGHT then return 0 end
+	if MapData.tileOwnerGrid[gridX] then
+		return MapData.tileOwnerGrid[gridX][gridY] or 0
+	end
+	return 0
+end
+
+-- Count tiles owned by a specific player
+function MapData.CountTilesOwnedBy(ownerId: number): number
+	local count = 0
+	for x = 1, Constants.GRID_WIDTH do
+		if MapData.tileOwnerGrid[x] then
+			for y = 1, Constants.GRID_HEIGHT do
+				if MapData.tileOwnerGrid[x][y] == ownerId then
+					count = count + 1
+				end
+			end
+		end
+	end
+	return count
 end
 
 return MapData

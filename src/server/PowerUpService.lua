@@ -40,7 +40,6 @@ local powerUpWeights = {
 	{type = "BOMB_UP", weight = 35},
 	{type = "FIRE_UP", weight = 35},
 	{type = "SPEED_UP", weight = 20},
-	{type = "ZOOM_OUT", weight = 10},
 }
 
 local totalWeight = 0
@@ -76,6 +75,14 @@ function PowerUpService.Initialize()
 		end
 	else
 		warn("[PowerUpService] Powerups folder not found at ReplicatedStorage/Assets/Powerups")
+	end
+
+	-- Override BOMB_UP template with the Default Bomb model from Assets/Bombs
+	local bombsFolder = assetsFolder and assetsFolder:FindFirstChild("Bombs")
+	local defaultBomb = bombsFolder and bombsFolder:FindFirstChild("Default Bomb")
+	if defaultBomb then
+		powerUpTemplates["BOMB_UP"] = defaultBomb
+		print("[PowerUpService] Using Default Bomb model for BOMB_UP powerup")
 	end
 
 	print("[PowerUpService] Initialized")
@@ -129,6 +136,15 @@ local function CreatePowerUpModel(powerUpType: string): Instance?
 		light.Brightness = 1.5
 		light.Range = 6
 		light.Parent = mainPart
+	end
+
+	-- Add white outline to BOMB_UP so players can distinguish it from placed bombs
+	if powerUpType == "BOMB_UP" then
+		local highlight = Instance.new("Highlight")
+		highlight.FillTransparency = 1
+		highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+		highlight.OutlineTransparency = 0
+		highlight.Parent = powerUp
 	end
 
 	CollectionService:AddTag(powerUp, "PowerUp")
@@ -357,7 +373,7 @@ function PowerUpService.SpawnCoin(gridX: number, gridY: number)
 	end)
 
 	-- Use proximity-based collection (more reliable than Touch events)
-	local COLLECT_DISTANCE = 4 -- Horizontal distance (ignoring Y)
+	local COLLECT_DISTANCE = 2.5 -- Horizontal distance (ignoring Y)
 
 	-- Helper to get horizontal distance (XZ plane only)
 	local function GetHorizontalDistance(pos1: Vector3, pos2: Vector3): number
@@ -368,6 +384,12 @@ function PowerUpService.SpawnCoin(gridX: number, gridY: number)
 
 	task.spawn(function()
 		while coin and coin.Parent do
+			-- Only allow collection during active gameplay
+			if GameState.currentState ~= Constants.STATES.PLAYING then
+				task.wait(0.5)
+				continue
+			end
+
 			local coinPos
 			if coin:IsA("BasePart") then
 				coinPos = coin.Position
@@ -382,34 +404,10 @@ function PowerUpService.SpawnCoin(gridX: number, gridY: number)
 				for _, checkPlayer in ipairs(Players:GetPlayers()) do
 					local character = checkPlayer.Character
 					if character then
-						-- Try HumanoidRootPart first
 						local hrp = character:FindFirstChild("HumanoidRootPart")
 						if hrp and hrp:IsA("BasePart") then
 							local distance = GetHorizontalDistance(hrp.Position, coinPos)
 							if distance < COLLECT_DISTANCE then
-								print("[Coin] Collecting! HorizDist:", distance)
-								PowerUpService.CollectCoin(coin, checkPlayer)
-								return
-							end
-						end
-
-						-- Also check Torso as backup
-						local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
-						if torso and torso:IsA("BasePart") then
-							local distance = GetHorizontalDistance(torso.Position, coinPos)
-							if distance < COLLECT_DISTANCE then
-								print("[Coin] Collecting (via Torso)! HorizDist:", distance)
-								PowerUpService.CollectCoin(coin, checkPlayer)
-								return
-							end
-						end
-
-						-- Final fallback: any BasePart
-						local anyPart = character:FindFirstChildWhichIsA("BasePart")
-						if anyPart then
-							local distance = GetHorizontalDistance(anyPart.Position, coinPos)
-							if distance < COLLECT_DISTANCE then
-								print("[Coin] Collecting (via anyPart)!")
 								PowerUpService.CollectCoin(coin, checkPlayer)
 								return
 							end
@@ -428,14 +426,15 @@ function PowerUpService.CollectPowerUp(powerUp: Instance, player: Player)
 	local data = activePowerUps[powerUp]
 	if not data then return end
 
+	-- Remove immediately to prevent double-collect race condition
+	activePowerUps[powerUp] = nil
+
 	local playerData = GameState.players[player.UserId]
 	if not playerData or not playerData.isAlive then return end
 
-	-- Remove from tracking
-	activePowerUps[powerUp] = nil
-
 	-- Apply effect
 	GameState.ApplyPowerUp(playerData, data.type)
+	playerData.powerupsCollected = (playerData.powerupsCollected or 0) + 1
 
 	-- Get position for sound before destroying
 	local soundPos = MapData.GridToWorld(data.gridX, data.gridY)
@@ -518,11 +517,11 @@ function PowerUpService.CollectCoin(coin: Instance, player: Player)
 	local data = activeCoins[coin]
 	if not data then return end
 
+	-- Remove immediately to prevent double-collect race condition
+	activeCoins[coin] = nil
+
 	local playerData = GameState.players[player.UserId]
 	if not playerData or not playerData.isAlive then return end
-
-	-- Remove from tracking
-	activeCoins[coin] = nil
 
 	-- Get position for sound before destroying
 	local soundPos = MapData.GridToWorld(data.gridX, data.gridY)
@@ -548,7 +547,7 @@ function PowerUpService.CollectCoin(coin: Instance, player: Player)
 	end
 
 	-- Add coin
-	playerData.coins = playerData.coins + 1
+	playerData.coins = playerData.coins + 10
 
 	-- Notify client
 	PowerUpCollected:FireClient(player, "COIN")

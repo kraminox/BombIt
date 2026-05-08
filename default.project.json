@@ -4,24 +4,29 @@
     "$className": "DataModel",
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
+      "$ignoreUnknownInstances": true,
       "Shared": {
         "$path": "src/shared"
       },
       "Remotes": {
         "$className": "Folder"
-      },
-      "Characters": {
-        "$className": "Folder"
       }
     },
     "ServerScriptService": {
       "$className": "ServerScriptService",
+      "$ignoreUnknownInstances": true,
       "Server": {
         "$path": "src/server"
       }
     },
     "StarterPlayer": {
       "$className": "StarterPlayer",
+      "$ignoreUnknownInstances": true,
+      "$properties": {
+        "EnableMouseLockOption": false,
+        "CameraMinZoomDistance": 8,
+        "CameraMaxZoomDistance": 24
+      },
       "StarterPlayerScripts": {
         "$className": "StarterPlayerScripts",
         "Client": {
@@ -31,6 +36,7 @@
     },
     "Workspace": {
       "$className": "Workspace",
+      "$ignoreUnknownInstances": true,
       "$properties": {
         "Gravity": 196.2
       },
@@ -43,21 +49,18 @@
     },
     "Lighting": {
       "$className": "Lighting",
-      "$properties": {
-        "Ambient": [0.4, 0.4, 0.4],
-        "Brightness": 2,
-        "OutdoorAmbient": [0.5, 0.5, 0.5],
-        "ClockTime": 14
-      }
+      "$ignoreUnknownInstances": true
     },
     "StarterGui": {
       "$className": "StarterGui",
+      "$ignoreUnknownInstances": true,
       "$properties": {
         "ResetPlayerGuiOnSpawn": false
       }
     },
     "SoundService": {
-      "$className": "SoundService"
+      "$className": "SoundService",
+      "$ignoreUnknownInstances": true
     }
   }
 }
