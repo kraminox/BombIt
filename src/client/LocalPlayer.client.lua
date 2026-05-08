@@ -167,6 +167,7 @@ local activeInputs = {
 }
 
 local bombButtonConnections: {[Instance]: RBXScriptConnection} = {}
+local bombButtonRoots: {[GuiObject]: boolean} = {}
 
 -- Check if a key matches input type
 local function IsKeyForInput(keyCode: Enum.KeyCode, inputType: string): boolean
@@ -189,16 +190,32 @@ local function RequestPlaceBomb()
 	PlaceBomb:FireServer()
 end
 
+local function UpdateBombButtonVisibility()
+	local shouldShow = currentGameState == Constants.STATES.PLAYING and localPlayerData.isAlive
+
+	for root in pairs(bombButtonRoots) do
+		if root.Parent then
+			root.Visible = shouldShow
+		else
+			bombButtonRoots[root] = nil
+		end
+	end
+end
+
 local function ConnectBombButton(root: Instance)
 	if bombButtonConnections[root] then return end
 
 	-- Studio-authored BombButton is a Frame with an ImageButton inside.
 	-- The generated mobile ImageButton named BombButton is already connected in GameUI.
 	if root:IsA("GuiButton") then return end
+	if not root:IsA("GuiObject") then return end
 
 	local button = (root:FindFirstChildWhichIsA("ImageButton", true)
 		or root:FindFirstChildWhichIsA("TextButton", true)) :: GuiButton?
 	if not button then return end
+
+	bombButtonRoots[root] = true
+	UpdateBombButtonVisibility()
 
 	bombButtonConnections[root] = button.Activated:Connect(RequestPlaceBomb)
 	root.Destroying:Connect(function()
@@ -207,6 +224,7 @@ local function ConnectBombButton(root: Instance)
 			connection:Disconnect()
 			bombButtonConnections[root] = nil
 		end
+		bombButtonRoots[root] = nil
 	end)
 end
 
@@ -412,6 +430,7 @@ SyncPlayerData.OnClientEvent:Connect(function(data)
 
 		-- Update danger tiles visibility after isAlive status change
 		task.defer(UpdateDangerTilesVisibility)
+		UpdateBombButtonVisibility()
 	end
 end)
 
@@ -452,6 +471,7 @@ RoundStateChanged.OnClientEvent:Connect(function(state: string, data: any?)
 
 	-- Update danger tiles visibility when game state changes
 	task.defer(UpdateDangerTilesVisibility)
+	UpdateBombButtonVisibility()
 end)
 
 -- Also disable jump when character spawns during gameplay
