@@ -86,77 +86,10 @@ end
 -- ============================================================
 -- GAMEPASS ITEM POPULATION
 -- ============================================================
-local VIP_ITEMS = {
-	{ name = "Bee Bomb", imageId = "rbxassetid://117704920081015" },
-	{ name = "Gold Explosion", imageId = "rbxassetid://130152535290985" },
-	{ name = "Confetti Explosion", imageId = "rbxassetid://88976904255248" },
-	{ name = "Default Dance", imageId = "rbxassetid://97831368846889" },
-}
-
-local ALL_BLUE_ITEMS = {
-	{ name = "Lightning Explosion", imageId = "rbxassetid://113022396372768" },
-	{ name = "Water Explosion", imageId = "rbxassetid://135369264988888" },
-	{ name = "Dynamite Blue", imageId = "rbxassetid://80034204252028" },
-}
-
-local function PopulateItemList(containerFrame: Frame?, items: {{name: string, imageId: string}})
-	if not containerFrame then return end
-
-	-- Find the ImageLabels container (frame with UIListLayout)
-	local imageLabels = containerFrame:FindFirstChild("ImageLabels") :: Frame?
-	if not imageLabels then return end
-
-	-- Find the ItemTemplate inside ImageLabels (first Frame child)
-	local itemTemplate: Frame? = nil
-	for _, child in ipairs(imageLabels:GetChildren()) do
-		if child:IsA("Frame") then
-			itemTemplate = child :: Frame
-			break
-		end
-	end
-	if not itemTemplate then return end
-
-	-- Clone the template, then hide the original
-	local template = itemTemplate:Clone()
-	itemTemplate.Visible = false
-
-	-- Clone template for each item
-	for i, item in ipairs(items) do
-		local entry = template:Clone()
-		entry.Name = "Item_" .. i
-		entry.LayoutOrder = i
-		entry.Visible = true
-
-		-- Set icon image (look for ImageLabel named Icon, or first ImageLabel)
-		local icon = entry:FindFirstChild("Icon") :: ImageLabel?
-		if not icon then
-			icon = entry:FindFirstChildWhichIsA("ImageLabel") :: ImageLabel?
-		end
-		if icon then
-			icon.Image = item.imageId
-		end
-
-		-- Set label text (look for TextLabel)
-		local label = entry:FindFirstChildWhichIsA("TextLabel")
-		if label then
-			label.Text = item.name
-		end
-
-		entry.Parent = imageLabels
-	end
-
-	template:Destroy()
-end
-
-local function PopulateGamepassItems()
-	if not gamepassFrame then return end
-
-	local vipFrame = gamepassFrame:FindFirstChild("VIPFrame") :: Frame?
-	PopulateItemList(vipFrame, VIP_ITEMS)
-
-	local allBlueFrame = gamepassFrame:FindFirstChild("AllBluePack") :: Frame?
-	PopulateItemList(allBlueFrame, ALL_BLUE_ITEMS)
-end
+-- Dev product IDs for legendary capsule purchases
+local LEGENDARY_1_PRODUCT = Economy.CAPSULE_DEV_PRODUCTS.Legendary1.productId
+local LEGENDARY_3_PRODUCT = Economy.CAPSULE_DEV_PRODUCTS.Legendary3.productId
+local LEGENDARY_5_PRODUCT = Economy.CAPSULE_DEV_PRODUCTS.Legendary5.productId
 
 -- ============================================================
 -- RAINBOW FRAME HELPERS (replicates SkinShop pattern)
@@ -256,40 +189,152 @@ end
 -- ============================================================
 -- WIRE BUY BUTTONS
 -- ============================================================
+-- Helper: find BuyBtn (or BuyFrame) and connect click regardless of instance type
+local function WireBuyBtn(parentFrame: Frame, gamepassId: number)
+	-- Look for BuyBtn inside BuyFrame, or directly in parentFrame
+	local buyBtn = parentFrame:FindFirstChild("BuyBtn", true)
+	if not buyBtn then
+		-- Fallback: use BuyFrame itself
+		buyBtn = parentFrame:FindFirstChild("BuyFrame")
+	end
+	if not buyBtn then return end
+
+	if buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton") then
+		(buyBtn :: GuiButton).MouseButton1Click:Connect(function()
+			PromptGamepass(gamepassId)
+		end)
+	elseif buyBtn:IsA("Frame") then
+		-- BuyBtn is a Frame — find a button child, or use InputBegan
+		local innerBtn = buyBtn:FindFirstChildWhichIsA("TextButton") or buyBtn:FindFirstChildWhichIsA("ImageButton")
+		if innerBtn then
+			(innerBtn :: GuiButton).MouseButton1Click:Connect(function()
+				PromptGamepass(gamepassId)
+			end)
+		else
+			-- Make frame clickable via InputBegan
+			buyBtn.Active = true
+			(buyBtn :: Frame).InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					PromptGamepass(gamepassId)
+				end
+			end)
+		end
+	end
+end
+
 local function WireBuyButtons()
 	if not gamepassFrame then return end
 
-	-- VIP Pass buy button
+	-- VIP Pass
 	local vipFrame = gamepassFrame:FindFirstChild("VIPFrame") :: Frame?
 	if vipFrame then
-		local buyBtn = vipFrame:FindFirstChild("BuyBtn", true)
-		if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
-			(buyBtn :: GuiButton).MouseButton1Click:Connect(function()
-				PromptGamepass(Economy.GAMEPASS_VIP)
-			end)
-		end
+		WireBuyBtn(vipFrame, Economy.GAMEPASS_VIP)
 	end
 
-	-- 2x Coins buy button
-	local doubleCoinsFrame = gamepassFrame:FindFirstChild("2xCoinsFrame") or gamepassFrame:FindFirstChild("DoubleCoinsFrame")
+	-- 2x Coins
+	local doubleCoinsFrame = gamepassFrame:FindFirstChild("2xCoinsFrame") :: Frame?
 	if doubleCoinsFrame then
-		local buyBtn = doubleCoinsFrame:FindFirstChild("BuyBtn", true)
-		if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
-			(buyBtn :: GuiButton).MouseButton1Click:Connect(function()
-				PromptGamepass(Economy.GAMEPASS_2X_COINS)
-			end)
-		end
+		WireBuyBtn(doubleCoinsFrame, Economy.GAMEPASS_2X_COINS)
 	end
 
-	-- All Blue Pack buy button
+	-- All Blue Pack
 	local allBlueFrame = gamepassFrame:FindFirstChild("AllBluePack") :: Frame?
 	if allBlueFrame then
-		local buyBtn = allBlueFrame:FindFirstChild("BuyBtn", true)
-		if buyBtn and (buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton")) then
-			(buyBtn :: GuiButton).MouseButton1Click:Connect(function()
-				PromptGamepass(Economy.GAMEPASS_ALL_BLUE)
+		WireBuyBtn(allBlueFrame, Economy.GAMEPASS_ALL_BLUE)
+	end
+end
+
+-- ============================================================
+-- CAPSULE DEV PRODUCT PURCHASES (ShopFrame)
+-- ============================================================
+local function PromptDevProduct(productId: number)
+	if purchasing then return end
+	purchasing = true
+	if clickSound then clickSound:Play() end
+
+	MarketplaceService:PromptProductPurchase(player, productId)
+
+	task.wait(1)
+	purchasing = false
+end
+
+-- Wire a single BuyBtn inside a frame to a dev product
+local function WireDevProductBtn(frame: Instance, productId: number)
+	local buyBtn = frame:FindFirstChild("BuyBtn", true)
+	if not buyBtn then return end
+
+	if buyBtn:IsA("TextButton") or buyBtn:IsA("ImageButton") then
+		(buyBtn :: GuiButton).MouseButton1Click:Connect(function()
+			PromptDevProduct(productId)
+		end)
+	elseif buyBtn:IsA("Frame") then
+		local innerBtn = buyBtn:FindFirstChildWhichIsA("TextButton") or buyBtn:FindFirstChildWhichIsA("ImageButton")
+		if innerBtn then
+			(innerBtn :: GuiButton).MouseButton1Click:Connect(function()
+				PromptDevProduct(productId)
+			end)
+		else
+			buyBtn.Active = true
+			(buyBtn :: Frame).InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					PromptDevProduct(productId)
+				end
 			end)
 		end
+	end
+end
+
+local function WireCapsuleBuyButtons()
+	if not shopFrame then return end
+
+	-- Look for legendary capsule buy frames
+	-- These contain BuyBtn children with Price labels showing R$ amounts
+	local leg1Frame = shopFrame:FindFirstChild("Legendary1Frame")
+		or shopFrame:FindFirstChild("Legendary1")
+		or shopFrame:FindFirstChild("1CapsuleFrame")
+	local leg3Frame = shopFrame:FindFirstChild("Legendary3Frame")
+		or shopFrame:FindFirstChild("Legendary3")
+		or shopFrame:FindFirstChild("3CapsuleFrame")
+		or shopFrame:FindFirstChild("3CapsulesFrame")
+	local leg5Frame = shopFrame:FindFirstChild("Legendary5Frame")
+		or shopFrame:FindFirstChild("Legendary5")
+		or shopFrame:FindFirstChild("5CapsuleFrame")
+		or shopFrame:FindFirstChild("5CapsulesFrame")
+
+	-- If named frames not found, search by scanning children for BuyBtn + Price patterns
+	if not leg1Frame or not leg3Frame or not leg5Frame then
+		-- Collect all child frames that have a BuyBtn descendant
+		local buyFrames: {Instance} = {}
+		for _, child in ipairs(shopFrame:GetChildren()) do
+			if child:IsA("Frame") and child:FindFirstChild("BuyBtn", true) then
+				table.insert(buyFrames, child)
+			end
+		end
+
+		-- Match frames to products by price text
+		for _, frame in ipairs(buyFrames) do
+			local priceLabel = frame:FindFirstChild("Price", true)
+			if priceLabel and priceLabel:IsA("TextLabel") then
+				local priceText = priceLabel.Text
+				if string.find(priceText, "60") and not leg1Frame then
+					leg1Frame = frame
+				elseif string.find(priceText, "150") and not leg3Frame then
+					leg3Frame = frame
+				elseif string.find(priceText, "300") and not leg5Frame then
+					leg5Frame = frame
+				end
+			end
+		end
+	end
+
+	if leg1Frame then
+		WireDevProductBtn(leg1Frame, LEGENDARY_1_PRODUCT)
+	end
+	if leg3Frame then
+		WireDevProductBtn(leg3Frame, LEGENDARY_3_PRODUCT)
+	end
+	if leg5Frame then
+		WireDevProductBtn(leg5Frame, LEGENDARY_5_PRODUCT)
 	end
 end
 
@@ -407,9 +452,9 @@ end
 storeGui.Enabled = false
 parentFrame.Visible = false
 
--- Populate gamepass items and wire buy buttons
-PopulateGamepassItems()
+-- Wire buy buttons
 WireBuyButtons()
+WireCapsuleBuyButtons()
 
 -- ShopInteract: open StoreUI (capsule tab) when player touches the proximity part
 local function SetupShopInteract()

@@ -4,6 +4,7 @@
 -- If already in group, request server to grant rewards (1000 coins + Legendary capsule).
 
 local Players = game:GetService("Players")
+local GroupService = game:GetService("GroupService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
 
@@ -71,6 +72,10 @@ local function OnTouched(hit: BasePart)
 			SendNotification("Already Claimed", "You already collected the group reward!")
 		elseif result.status == "not_in_group" then
 			if failSound then failSound:Play() end
+			-- Prompt the native Roblox group join dialog
+			pcall(function()
+				GroupService:PromptJoinAsync(player, GROUP_ID)
+			end)
 			SendNotification("Join Our Group!", "Join the group to claim $1,000 and a Legendary Capsule!")
 		end
 	end

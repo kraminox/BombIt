@@ -204,7 +204,7 @@ Economy.VIP_XP_MULTIPLIER = 1.5
 
 -- Dev product: 2x Luck (temporary boost)
 Economy.DEV_PRODUCT_2X_LUCK = 3582271001
-Economy.DEV_PRODUCT_2X_LUCK_ROBUX = 49
+Economy.DEV_PRODUCT_2X_LUCK_ROBUX = 75
 Economy.LUCK_BOOST_DURATION = 600 -- 10 minutes in seconds
 
 -- =============================================================
