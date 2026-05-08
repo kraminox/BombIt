@@ -11,6 +11,7 @@ local ContextActionService = game:GetService("ContextActionService")
 local SoundService = game:GetService("SoundService")
 
 local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui") :: PlayerGui
 
 -- Wait for shared modules
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -165,6 +166,8 @@ local activeInputs = {
 	right = false,
 }
 
+local bombButtonConnections: {[Instance]: RBXScriptConnection} = {}
+
 -- Check if a key matches input type
 local function IsKeyForInput(keyCode: Enum.KeyCode, inputType: string): boolean
 	local keys = inputKeys[inputType]
@@ -176,6 +179,41 @@ local function IsKeyForInput(keyCode: Enum.KeyCode, inputType: string): boolean
 		end
 	end
 	return false
+end
+
+local function RequestPlaceBomb()
+	if currentGameState ~= Constants.STATES.PLAYING then return end
+	if not localPlayerData.isAlive then return end
+
+	PlayDropSound()
+	PlaceBomb:FireServer()
+end
+
+local function ConnectBombButton(root: Instance)
+	if bombButtonConnections[root] then return end
+
+	-- Studio-authored BombButton is a Frame with an ImageButton inside.
+	-- The generated mobile ImageButton named BombButton is already connected in GameUI.
+	if root:IsA("GuiButton") then return end
+
+	local button = (root:FindFirstChildWhichIsA("ImageButton", true)
+		or root:FindFirstChildWhichIsA("TextButton", true)) :: GuiButton?
+	if not button then return end
+
+	bombButtonConnections[root] = button.Activated:Connect(RequestPlaceBomb)
+	root.Destroying:Connect(function()
+		local connection = bombButtonConnections[root]
+		if connection then
+			connection:Disconnect()
+			bombButtonConnections[root] = nil
+		end
+	end)
+end
+
+local function TryConnectBombButton(instance: Instance)
+	if instance.Name == "BombButton" then
+		ConnectBombButton(instance)
+	end
 end
 
 -- Handle input began
@@ -197,18 +235,12 @@ local function OnInputBegan(input: InputObject, gameProcessed: boolean)
 
 	-- Bomb placement - only during gameplay
 	if IsKeyForInput(keyCode, "bomb") then
-		if currentGameState == Constants.STATES.PLAYING then
-			PlayDropSound()
-			PlaceBomb:FireServer()
-		end
+		RequestPlaceBomb()
 	end
 
 	-- Gamepad
 	if input.KeyCode == Enum.KeyCode.ButtonB then
-		if currentGameState == Constants.STATES.PLAYING then
-			PlayDropSound()
-			PlaceBomb:FireServer()
-		end
+		RequestPlaceBomb()
 	end
 end
 
@@ -431,6 +463,10 @@ player.CharacterAdded:Connect(function(character)
 end)
 
 -- Connect events
+for _, descendant in ipairs(playerGui:GetDescendants()) do
+	TryConnectBombButton(descendant)
+end
+playerGui.DescendantAdded:Connect(TryConnectBombButton)
 UserInputService.InputBegan:Connect(OnInputBegan)
 UserInputService.InputEnded:Connect(OnInputEnded)
 RunService:BindToRenderStep("PlayerMovement", Enum.RenderPriority.Input.Value, OnUpdate)

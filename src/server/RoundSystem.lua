@@ -1432,6 +1432,43 @@ function RoundSystem.CheckRoundEnd(endIfOnlyOneAlive: boolean?)
 		return
 	end
 
+	if endIfOnlyOneAlive and teamSize > 1 then
+		local aliveTeams = {} :: {[number]: boolean}
+		for _, pd in ipairs(alivePlayers) do
+			local team = GameState.teamAssignments[pd.userId]
+			if team then
+				aliveTeams[team] = true
+			end
+		end
+
+		local teamCount = 0
+		local lastTeam = 0
+		for team in pairs(aliveTeams) do
+			teamCount += 1
+			lastTeam = team
+		end
+
+		if teamCount <= 1 then
+			if teamCount == 1 and #alivePlayers > 0 then
+				for _, pd in ipairs(alivePlayers) do
+					if GameState.teamAssignments[pd.userId] == lastTeam then
+						for _, p in ipairs(Players:GetPlayers()) do
+							if p.UserId == pd.userId then
+								currentWinner = p
+								break
+							end
+						end
+						break
+					end
+				end
+			else
+				currentWinner = nil
+			end
+			RoundSystem.EndRound()
+			return
+		end
+	end
+
 	-- Respawn mode: round never ends from kills, only from timer or disconnect-driven last-player checks.
 	if GameState.currentMode.respawn then return end
 
