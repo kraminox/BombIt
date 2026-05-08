@@ -191,6 +191,7 @@ Constants.MODES = {
 		teamSize = 1,
 		collectCoins = false,
 		paintTiles = true,
+		respawn = true,
 	},
 	FALLING_TILES = {
 		id = "FALLING_TILES",

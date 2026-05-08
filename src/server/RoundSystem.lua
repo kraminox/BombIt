@@ -44,11 +44,29 @@ local roundTimer = 0
 local roundCharConnections: {[number]: RBXScriptConnection} = {}
 local currentWinner: Player? = nil
 local roundResults = {} -- {userId, kills, place}
+local roundParticipantCount = 0
+local roundStartedWithMultiplePlayers = false
+local roundParticipantIds: {[number]: boolean} = {}
+local respawnPending: {[number]: boolean} = {}
 
 -- Recency tracking for mode selection (recent modes get 0.6x weight)
 local recentFormats = {} :: {string} -- last 2 format IDs
 local recentGameTypes = {} :: {string} -- last 2 game type IDs
 local RECENCY_MULTIPLIER = 0.6
+
+local function IsPlayerConnected(player: Player): boolean
+	return Players:GetPlayerByUserId(player.UserId) == player
+end
+
+local function GetAliveRoundPlayers(): {any}
+	local alivePlayers = {}
+	for _, playerData in ipairs(GameState.GetAlivePlayers()) do
+		if roundParticipantIds[playerData.userId] then
+			table.insert(alivePlayers, playerData)
+		end
+	end
+	return alivePlayers
+end
 
 -- Rate limiting for emotes/stickers
 local lastEmoteTime = {} :: {[number]: number}
@@ -184,6 +202,10 @@ function RoundSystem.CalculateResults(): {{userId: number, kills: number, coins:
 	local results = {}
 
 	for userId, playerData in pairs(GameState.players) do
+		if not roundParticipantIds[userId] then
+			continue
+		end
+
 		local kills = playerData.kills or 0
 		local demolitions = playerData.demolitions or 0
 		local powerups = playerData.powerupsCollected or 0
@@ -292,15 +314,15 @@ function RoundSystem.CalculateResults(): {{userId: number, kills: number, coins:
 	end
 
 	-- Sort by mode-specific criteria
-	if GameState.currentMode.respawn then
-		-- Respawn mode: sort by kills (most kills = first place)
-		table.sort(results, function(a, b)
-			return a.kills > b.kills
-		end)
-	elseif GameState.currentMode.paintTiles then
+	if GameState.currentMode.paintTiles then
 		-- Color Battle: sort by tiles owned (most tiles = first place)
 		table.sort(results, function(a, b)
 			return (a.tilesOwned or 0) > (b.tilesOwned or 0)
+		end)
+	elseif GameState.currentMode.respawn then
+		-- Respawn mode: sort by kills (most kills = first place)
+		table.sort(results, function(a, b)
+			return a.kills > b.kills
 		end)
 	else
 		-- Default: alive first, then by kills
@@ -389,6 +411,12 @@ function RoundSystem.OnPlayerAdded(player: Player)
 	-- Wait a moment for player to fully load
 	task.wait(0.5)
 
+	local playerData = GameState.players[player.UserId]
+	if playerData and GameState.currentState ~= Constants.STATES.LOBBY then
+		playerData.isAlive = false
+		SyncPlayerData:FireClient(player, playerData)
+	end
+
 	-- Let player spawn naturally as their avatar on SpawnLocation in lobby
 	-- Don't force custom character here
 
@@ -423,9 +451,30 @@ function RoundSystem.OnPlayerRemoved(player: Player)
 		roundCharConnections[player.UserId] = nil
 	end
 
+	local playerData = GameState.players[player.UserId]
+	local wasAlive = playerData and playerData.isAlive
+	if playerData then
+		playerData.isAlive = false
+		playerData.invulnerable = true
+	end
+
+	if currentWinner and currentWinner.UserId == player.UserId then
+		currentWinner = nil
+	end
+	roundParticipantIds[player.UserId] = nil
+	respawnPending[player.UserId] = nil
+
 	-- Check if this affects the round
 	if GameState.currentState == Constants.STATES.PLAYING then
-		RoundSystem.CheckRoundEnd()
+		if wasAlive then
+			PlayerDied:FireAllClients(player.UserId, 0)
+		end
+		task.defer(RoundSystem.CheckRoundEnd, true)
+	elseif GameState.currentState == Constants.STATES.PREPARING or GameState.currentState == Constants.STATES.COUNTDOWN then
+		if wasAlive then
+			PlayerDied:FireAllClients(player.UserId, 0)
+		end
+		task.defer(RoundSystem.CheckRoundEnd, true)
 	end
 end
 
@@ -550,14 +599,24 @@ function RoundSystem.SpawnPlayersInArena()
 	-- Filter out AFK players and mark them as not alive for this round
 	local playerList = {}
 	for _, p in ipairs(Players:GetPlayers()) do
+		local pd = GameState.players[p.UserId]
+		if not pd or not IsPlayerConnected(p) then
+			continue
+		end
+
 		if GameState.IsPlayerAFK(p.UserId) then
-			local pd = GameState.players[p.UserId]
 			if pd then
 				pd.isAlive = false
 			end
 		else
 			table.insert(playerList, p)
 		end
+	end
+	roundParticipantCount = #playerList
+	roundStartedWithMultiplePlayers = roundStartedWithMultiplePlayers or roundParticipantCount > 1
+	roundParticipantIds = {}
+	for _, player in ipairs(playerList) do
+		roundParticipantIds[player.UserId] = true
 	end
 	local arena = Workspace:FindFirstChild("Arena")
 
@@ -576,9 +635,14 @@ function RoundSystem.SpawnPlayersInArena()
 
 	-- Load all characters in parallel
 	for _, player in ipairs(playerList) do
+		if not IsPlayerConnected(player) then
+			continue
+		end
+
 		-- Reset player data for round
 		local playerData = GameState.players[player.UserId]
 		if playerData then
+			roundParticipantIds[player.UserId] = true
 			GameState.ResetPlayerForRound(playerData)
 			-- Restore color index after reset
 			if GameState.currentMode.paintTiles then
@@ -595,6 +659,10 @@ function RoundSystem.SpawnPlayersInArena()
 
 	-- Remove ForceFields from all arena characters
 	for _, player in ipairs(playerList) do
+		if not IsPlayerConnected(player) then
+			continue
+		end
+
 		local character = player.Character
 		if character then
 			local ff = character:FindFirstChildOfClass("ForceField")
@@ -604,9 +672,21 @@ function RoundSystem.SpawnPlayersInArena()
 
 	-- Set up all characters
 	for i, player in ipairs(playerList) do
+		if not IsPlayerConnected(player) then
+			continue
+		end
+
+		local playerData = GameState.players[player.UserId]
+		if not playerData or not playerData.isAlive then
+			continue
+		end
+
 		local character = player.Character
 		if not character then
 			task.wait(0.5)
+			if not IsPlayerConnected(player) then
+				continue
+			end
 			character = player.Character
 		end
 		if not character then continue end
@@ -623,8 +703,6 @@ function RoundSystem.SpawnPlayersInArena()
 
 		-- Set up character for arena
 		RoundSystem.SetupArenaCharacter(character, player)
-
-		local playerData = GameState.players[player.UserId]
 
 		if spawnPart then
 			-- Spawn slightly above the surface to prevent falling through
@@ -960,10 +1038,13 @@ function RoundSystem.OnPlayerDeath(player: Player)
 	local playerData = GameState.players[player.UserId]
 	if not playerData then return end
 
-	if not playerData.isAlive then return end -- Already dead
+	-- In respawn modes, Roblox reset/humanoid death should still respawn back into the arena.
+	if GameState.currentMode and GameState.currentMode.respawn then
+		RoundSystem.HandleRespawnModeDeath(player, 0, false)
+		return
+	end
 
-	-- In respawn mode, deaths are handled by DamagePlayer — skip Humanoid.Died fallback
-	if GameState.currentMode and GameState.currentMode.respawn then return end
+	if not playerData.isAlive then return end -- Already dead
 
 	local eliminated = GameState.TakeDamage(playerData)
 
@@ -1121,6 +1202,8 @@ function RoundSystem.RespawnPlayer(player: Player)
 	if GameState.currentState ~= Constants.STATES.PLAYING then return end
 	local playerData = GameState.players[player.UserId]
 	if not playerData then return end
+	if not roundParticipantIds[player.UserId] then return end
+	if not IsPlayerConnected(player) then return end
 
 	-- Pick spawn before reloading character
 	local spawnPart = RoundSystem.GetUnoccupiedSpawn()
@@ -1191,6 +1274,7 @@ function RoundSystem.RespawnPlayer(player: Player)
 	-- Start invulnerability
 	playerData.invulnerable = true
 	SyncPlayerData:FireClient(player, playerData)
+	respawnPending[player.UserId] = nil
 
 	-- Blink effect coroutine
 	task.spawn(function()
@@ -1230,6 +1314,44 @@ function RoundSystem.RespawnPlayer(player: Player)
 	end)
 end
 
+function RoundSystem.HandleRespawnModeDeath(player: Player, killerId: number?, creditKill: boolean?)
+	if GameState.currentState ~= Constants.STATES.PLAYING then return end
+	if not IsPlayerConnected(player) then return end
+	if not roundParticipantIds[player.UserId] then return end
+
+	local playerData = GameState.players[player.UserId]
+	if not playerData then return end
+	if respawnPending[player.UserId] then return end
+
+	respawnPending[player.UserId] = true
+
+	if creditKill and killerId and killerId ~= 0 and killerId ~= player.UserId then
+		local killerData = GameState.players[killerId]
+		if killerData then
+			killerData.kills = (killerData.kills or 0) + 1
+			local killerPlayer = Players:GetPlayerByUserId(killerId)
+			if killerPlayer then
+				SyncPlayerData:FireClient(killerPlayer, killerData)
+			end
+		end
+	end
+
+	PlayerDied:FireAllClients(player.UserId, killerId or 0)
+
+	local character = player.Character
+	if character then
+		RoundSystem.RagdollCharacter(character)
+	end
+
+	task.delay(Constants.RESPAWN_DELAY, function()
+		if not IsPlayerConnected(player) then
+			respawnPending[player.UserId] = nil
+			return
+		end
+		RoundSystem.RespawnPlayer(player)
+	end)
+end
+
 function RoundSystem.DamagePlayer(player: Player, killerId: number?)
 	local playerData = GameState.players[player.UserId]
 	if not playerData or not playerData.isAlive then return end
@@ -1246,31 +1368,7 @@ function RoundSystem.DamagePlayer(player: Player, killerId: number?)
 
 	-- Respawn mode: no elimination, just ragdoll and respawn
 	if GameState.currentMode.respawn then
-		-- Credit the kill (skip self-kills)
-		if killerId and killerId ~= 0 and killerId ~= player.UserId then
-			local killerData = GameState.players[killerId]
-			if killerData then
-				killerData.kills = (killerData.kills or 0) + 1
-				local killerPlayer = Players:GetPlayerByUserId(killerId)
-				if killerPlayer then
-					SyncPlayerData:FireClient(killerPlayer, killerData)
-				end
-			end
-		end
-
-		-- Fire kill feed event
-		PlayerDied:FireAllClients(player.UserId, killerId or 0)
-
-		-- Ragdoll briefly
-		local character = player.Character
-		if character then
-			RoundSystem.RagdollCharacter(character)
-		end
-
-		-- After delay, respawn (no fade-to-black)
-		task.delay(Constants.RESPAWN_DELAY, function()
-			RoundSystem.RespawnPlayer(player)
-		end)
+		RoundSystem.HandleRespawnModeDeath(player, killerId, true)
 		return
 	end
 
@@ -1311,15 +1409,34 @@ function RoundSystem.DamagePlayer(player: Player, killerId: number?)
 	end
 end
 
-function RoundSystem.CheckRoundEnd()
+function RoundSystem.CheckRoundEnd(endIfOnlyOneAlive: boolean?)
 	if GameState.currentState ~= Constants.STATES.PLAYING then return end
 
-	-- Respawn mode: round never ends from kills, only from timer
+	local alivePlayers = GetAliveRoundPlayers()
+	local totalPlayers = roundParticipantCount
+	local teamSize = GameState.currentMode.teamSize or 1
+
+	if endIfOnlyOneAlive and (teamSize == 1 or GameState.currentMode.paintTiles) and #alivePlayers <= 1 then
+		if #alivePlayers == 1 then
+			local winnerData = alivePlayers[1]
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p.UserId == winnerData.userId then
+					currentWinner = p
+					break
+				end
+			end
+		else
+			currentWinner = nil
+		end
+		RoundSystem.EndRound()
+		return
+	end
+
+	-- Respawn mode: round never ends from kills, only from timer or disconnect-driven last-player checks.
 	if GameState.currentMode.respawn then return end
 
 	-- In Color Battle mode, end early only if the tile leader is the last one alive
 	if GameState.currentMode.paintTiles then
-		local alivePlayers = GameState.GetAlivePlayers()
 		if #alivePlayers <= 1 and #alivePlayers > 0 then
 			local lastAlive = alivePlayers[1]
 			-- Check if the last player alive also leads in tiles
@@ -1348,12 +1465,8 @@ function RoundSystem.CheckRoundEnd()
 		return
 	end
 
-	local alivePlayers = GameState.GetAlivePlayers()
-	local totalPlayers = #Players:GetPlayers()
-	local teamSize = GameState.currentMode.teamSize or 1
-
 	-- In single player testing mode, only end if player dies
-	if totalPlayers == 1 then
+	if totalPlayers == 1 and not roundStartedWithMultiplePlayers then
 		if #alivePlayers == 0 then
 			currentWinner = nil
 			RoundSystem.EndRound()
@@ -1571,6 +1684,10 @@ function RoundSystem.GameLoop()
 	while true do
 		-- LOBBY STATE
 		RoundSystem.SetState(Constants.STATES.LOBBY)
+		roundParticipantCount = 0
+		roundStartedWithMultiplePlayers = false
+		roundParticipantIds = {}
+		respawnPending = {}
 
 		-- Clear team assignments from previous round
 		GameState.teamAssignments = {}
@@ -1605,6 +1722,7 @@ function RoundSystem.GameLoop()
 			task.wait(1)
 			lobbyTimer = lobbyTimer - 1
 		end
+		roundStartedWithMultiplePlayers = GameState.GetPlayerCount() > 1
 
 		-- Select random game mode and fire to clients for slot animation
 		local chosenFormat, chosenType = RoundSystem.SelectRandomMode()
@@ -1612,9 +1730,7 @@ function RoundSystem.GameLoop()
 		task.wait(Constants.MODE_SELECTION_DURATION)
 
 		-- Tell clients to black out the screen before any respawning happens
-		RoundStateChanged:FireAllClients("Preparing", {
-			mode = GameState.currentMode,
-		})
+		RoundSystem.SetState(Constants.STATES.PREPARING)
 		task.wait(0.4) -- Let the black fade complete on clients
 
 		-- Generate new map (skip character select)
@@ -1653,7 +1769,8 @@ function RoundSystem.GameLoop()
 		-- Send active player list for camera panning (exclude AFK players)
 		local activePlayers = {}
 		for _, p in ipairs(Players:GetPlayers()) do
-			if p.Character and not GameState.IsPlayerAFK(p.UserId) then
+			local pd = GameState.players[p.UserId]
+			if p.Character and pd and pd.isAlive and not GameState.IsPlayerAFK(p.UserId) then
 				table.insert(activePlayers, p.UserId)
 			end
 		end
@@ -1668,17 +1785,18 @@ function RoundSystem.GameLoop()
 
 		-- PLAYING STATE — unlock movement
 		for _, p in ipairs(Players:GetPlayers()) do
-			if p.Character then
+			local pd = GameState.players[p.UserId]
+			if p.Character and pd and pd.isAlive then
 				local hum = p.Character:FindFirstChild("Humanoid")
 				if hum then
-					local pd = GameState.players[p.UserId]
-					hum.WalkSpeed = pd and pd.speed or Constants.MOVE_SPEED
+					hum.WalkSpeed = pd.speed or Constants.MOVE_SPEED
 				end
 			end
 		end
 
 		RoundSystem.SetState(Constants.STATES.PLAYING)
 		currentWinner = nil
+		RoundSystem.CheckRoundEnd(true)
 
 		local playTimer = Constants.ROUND_LENGTH
 		while playTimer > 0 and GameState.currentState == Constants.STATES.PLAYING do
@@ -1698,12 +1816,37 @@ function RoundSystem.GameLoop()
 
 		-- Time ran out
 		if GameState.currentState == Constants.STATES.PLAYING then
-			if GameState.currentMode.respawn then
+			if GameState.currentMode.paintTiles then
+				-- Color Battle: determine winner by most tiles
+				local bestUserId = 0
+				local bestTiles = 0
+				for userId, playerData in pairs(GameState.players) do
+					if roundParticipantIds[userId] then
+						local tiles = MapData.CountTilesOwnedBy(userId)
+						playerData.tilesOwned = tiles
+						if tiles > bestTiles then
+							bestTiles = tiles
+							bestUserId = userId
+						end
+					end
+				end
+
+				if bestUserId ~= 0 then
+					for _, p in ipairs(Players:GetPlayers()) do
+						if p.UserId == bestUserId then
+							currentWinner = p
+							break
+						end
+					end
+				else
+					currentWinner = nil
+				end
+			elseif GameState.currentMode.respawn then
 				-- Respawn mode: winner is player with most kills
 				local bestKills = -1
 				local bestUserId = 0
 				for userId, playerData in pairs(GameState.players) do
-					if (playerData.kills or 0) > bestKills then
+					if roundParticipantIds[userId] and (playerData.kills or 0) > bestKills then
 						bestKills = playerData.kills or 0
 						bestUserId = userId
 					end
@@ -1719,32 +1862,9 @@ function RoundSystem.GameLoop()
 					currentWinner = nil
 				end
 				RoundSystem.EndRound()
-			elseif GameState.currentMode.paintTiles then
-				-- Color Battle: determine winner by most tiles
-				local bestUserId = 0
-				local bestTiles = 0
-				for userId, playerData in pairs(GameState.players) do
-					local tiles = MapData.CountTilesOwnedBy(userId)
-					playerData.tilesOwned = tiles
-					if tiles > bestTiles then
-						bestTiles = tiles
-						bestUserId = userId
-					end
-				end
-
-				if bestUserId ~= 0 then
-					for _, p in ipairs(Players:GetPlayers()) do
-						if p.UserId == bestUserId then
-							currentWinner = p
-							break
-						end
-					end
-				else
-					currentWinner = nil
-				end
 			else
 				-- Sudden death if tied
-				local alive = GameState.GetAlivePlayers()
+				local alive = GetAliveRoundPlayers()
 				if #alive > 1 then
 					-- Destroy all remaining soft walls
 					MapGenerator.DestroyAllSoftWalls()
@@ -1766,7 +1886,7 @@ function RoundSystem.GameLoop()
 				-- After sudden death, determine winner
 				if GameState.currentState == Constants.STATES.PLAYING then
 					local teamSizeSD = GameState.currentMode.teamSize or 1
-					local aliveSD = GameState.GetAlivePlayers()
+					local aliveSD = GetAliveRoundPlayers()
 
 					if teamSizeSD > 1 then
 						-- Team mode tiebreaker: team with most alive players wins

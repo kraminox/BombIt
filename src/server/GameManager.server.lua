@@ -496,6 +496,11 @@ end
 
 -- Handle player leaving
 local function OnPlayerRemoving(player: Player)
+	-- Notify the round system before any yielding save work so leavers stop counting as alive immediately.
+	if RoundSystem then
+		RoundSystem.OnPlayerRemoved(player)
+	end
+
 	SavePlayerData(player)
 
 	-- Push final stats to leaderboard datastores (after save syncs persistent data)
@@ -534,10 +539,6 @@ local function OnPlayerRemoving(player: Player)
 		QuestService.RemovePlayer(player)
 	end
 
-	-- Notify round system
-	if RoundSystem then
-		RoundSystem.OnPlayerRemoved(player)
-	end
 end
 
 -- Admin command handling
