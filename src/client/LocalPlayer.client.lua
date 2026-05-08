@@ -191,7 +191,7 @@ local function RequestPlaceBomb()
 end
 
 local function UpdateBombButtonVisibility()
-	local shouldShow = currentGameState == Constants.STATES.PLAYING and localPlayerData.isAlive
+	local shouldShow = currentGameState == Constants.STATES.PLAYING or currentGameState == Constants.STATES.COUNTDOWN
 
 	for root in pairs(bombButtonRoots) do
 		if root.Parent then
