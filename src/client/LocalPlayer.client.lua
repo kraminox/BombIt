@@ -168,6 +168,7 @@ local activeInputs = {
 
 local bombButtonConnections: {[Instance]: RBXScriptConnection} = {}
 local bombButtonRoots: {[GuiObject]: boolean} = {}
+local lastBombRequestTime = 0
 
 -- Check if a key matches input type
 local function IsKeyForInput(keyCode: Enum.KeyCode, inputType: string): boolean
@@ -185,6 +186,10 @@ end
 local function RequestPlaceBomb()
 	if currentGameState ~= Constants.STATES.PLAYING then return end
 	if not localPlayerData.isAlive then return end
+
+	local now = tick()
+	if now - lastBombRequestTime < 0.15 then return end
+	lastBombRequestTime = now
 
 	PlayDropSound()
 	PlaceBomb:FireServer()
@@ -205,32 +210,57 @@ end
 local function ConnectBombButton(root: Instance)
 	if bombButtonConnections[root] then return end
 
-	-- Studio-authored BombButton is a Frame with an ImageButton inside.
+	-- Studio-authored BombButton has a BombFrame with an ImageButton inside.
 	-- The generated mobile ImageButton named BombButton is already connected in GameUI.
 	if root:IsA("GuiButton") then return end
-	if not root:IsA("GuiObject") then return end
 
 	local button = (root:FindFirstChildWhichIsA("ImageButton", true)
 		or root:FindFirstChildWhichIsA("TextButton", true)) :: GuiButton?
 	if not button then return end
 
-	bombButtonRoots[root] = true
+	local bombFrame = root:FindFirstChild("BombFrame", true)
+	local visibleRoot = if bombFrame and bombFrame:IsA("GuiObject")
+		then bombFrame
+		elseif root:IsA("GuiObject")
+		then root
+		else button:FindFirstAncestorWhichIsA("GuiObject")
+	if visibleRoot then
+		bombButtonRoots[visibleRoot] = true
+		visibleRoot.Active = true
+	end
+	button.Active = true
 	UpdateBombButtonVisibility()
 
-	bombButtonConnections[root] = button.Activated:Connect(RequestPlaceBomb)
+	local activatedConnection = button.Activated:Connect(RequestPlaceBomb)
+	local inputConnection: RBXScriptConnection? = nil
+	if visibleRoot then
+		inputConnection = visibleRoot.InputBegan:Connect(function(input: InputObject)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				RequestPlaceBomb()
+			end
+		end)
+	end
+
+	bombButtonConnections[root] = activatedConnection
 	root.Destroying:Connect(function()
 		local connection = bombButtonConnections[root]
 		if connection then
 			connection:Disconnect()
 			bombButtonConnections[root] = nil
 		end
-		bombButtonRoots[root] = nil
+		if inputConnection then
+			inputConnection:Disconnect()
+		end
+		if visibleRoot then
+			bombButtonRoots[visibleRoot] = nil
+		end
 	end)
 end
 
 local function TryConnectBombButton(instance: Instance)
 	if instance.Name == "BombButton" then
-		ConnectBombButton(instance)
+		task.defer(ConnectBombButton, instance)
 	end
 end
 
